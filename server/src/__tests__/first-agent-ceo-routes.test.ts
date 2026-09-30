@@ -227,4 +227,51 @@ describeEmbeddedPostgres("first agent in a company becomes the CEO", () => {
     expect(approved!.role).toBe("ceo");
     expect(await agentGrantKeys(db, company.id, res.body.agent.id)).toEqual(ROOT_CEO_GRANT_KEYS);
   }, 30_000);
+  it("makes only one founding CEO when two first hires arrive at the same time", async () => {
+    const company = await seedCompany(db);
+    const app = createApp(db, boardActor(company.id));
+
+    const [a, b] = await Promise.all([
+      request(app)
+        .post(`/api/companies/${company.id}/agent-hires`)
+        .send({ name: "Ada", role: "general", adapterType: "process", adapterConfig: {} }),
+      request(app)
+        .post(`/api/companies/${company.id}/agents`)
+        .send({ name: "Bob", role: "engineer", adapterType: "process", adapterConfig: {} }),
+    ]);
+    expect(a.status, JSON.stringify(a.body)).toBe(201);
+    expect(b.status, JSON.stringify(b.body)).toBe(201);
+
+    const rows = await db.select().from(agents).where(eq(agents.companyId, company.id));
+    const ceos = rows.filter((row) => row.role === "ceo" && row.reportsTo === null);
+    expect(ceos).toHaveLength(1);
+    const other = rows.find((row) => row.id !== ceos[0]!.id)!;
+    // The later agent keeps the role its request asked for and reports to the CEO.
+    expect(other.role).toBe(other.name === "Ada" ? "general" : "engineer");
+    expect(other.reportsTo).toBe(ceos[0]!.id);
+    expect(await agentGrantKeys(db, company.id, ceos[0]!.id)).toEqual(ROOT_CEO_GRANT_KEYS);
+  }, 30_000);
+
+  it("files a board-approved hire request without a pre-created agent as CEO when it is the first agent", async () => {
+    const company = await seedCompany(db);
+    const approvals = approvalService(db);
+    const approval = await approvals.create(company.id, {
+      type: "hire_agent",
+      requestedByAgentId: null,
+      requestedByUserId: "board-user",
+      status: "pending",
+      payload: { name: "Grace", role: "engineer", adapterType: "process", adapterConfig: {} },
+      decisionNote: null,
+      decidedByUserId: null,
+      decidedAt: null,
+      updatedAt: new Date(),
+    });
+
+    await approvals.approve(approval.id, "board-user", "Approved.");
+
+    const [grace] = await db.select().from(agents).where(eq(agents.companyId, company.id));
+    expect(grace!.name).toBe("Grace");
+    expect(grace!.role).toBe("ceo");
+    expect(grace!.reportsTo).toBeNull();
+  }, 30_000);
 });

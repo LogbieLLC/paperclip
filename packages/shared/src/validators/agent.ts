@@ -292,6 +292,8 @@ export const updateAgentPermissionsSchema = z.object({
   canCreateAgents: z.boolean(),
   canCreateSkills: z.boolean().optional(),
   canAssignTasks: z.boolean(),
+  // Board-only: whether the agent may approve or decline agent join requests.
+  canApproveJoins: z.boolean().optional(),
   trustPreset: trustPresetSchema.optional(),
   authorizationPolicy: trustAuthorizationPolicySchema.optional(),
 });

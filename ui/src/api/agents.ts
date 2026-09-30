@@ -83,6 +83,8 @@ export interface AgentPermissionUpdate {
   canCreateAgents: boolean;
   canCreateSkills: boolean;
   canAssignTasks: boolean;
+  /** Board-only: grants or revokes the agent's `joins:approve` permission. */
+  canApproveJoins?: boolean;
   trustPreset?: AgentPermissions["trustPreset"];
   authorizationPolicy?: AgentPermissions["authorizationPolicy"];
 }

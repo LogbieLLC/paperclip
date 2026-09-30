@@ -91,7 +91,7 @@ import {
 } from "../services/index.js";
 import { badRequest, conflict, forbidden, HttpError, notFound, unprocessable } from "../errors.js";
 import { ONBOARDING_FIRST_TASK_SKILL_KEY, PAPERCLIP_CORE_SKILL_KEYS } from "../services/company-skills.js";
-import { companyAwaitsFirstAgent, FIRST_AGENT_ROLE } from "../services/first-agent-ceo.js";
+import { companyAwaitsFirstAgent, FIRST_AGENT_ROLE, settleFoundingCeo } from "../services/first-agent-ceo.js";
 import { createRunSecretRedactionRegistry } from "../services/run-secret-redaction.js";
 import { assertAuthenticated, assertBoard, assertCompanyAccess, assertInstanceAdmin, buildActorSecretContext, getAccessibleResource, getActorInfo, hasCompanyAccess } from "./authz.js";
 import { runAdapterLoginStartSpine } from "./adapter-login-route-spine.js";
@@ -4500,7 +4500,9 @@ export function agentRoutes(
     // The company's first agent is its CEO whatever it is named or the client
     // asked for. Resolved before the role-driven skill defaults below so the
     // CEO also receives the core CEO skills.
-    if (await companyAwaitsFirstAgent(db, companyId)) {
+    const hireRequestedRole = hireInput.role;
+    const hireIsFirstAgent = await companyAwaitsFirstAgent(db, companyId);
+    if (hireIsFirstAgent) {
       hireInput.role = FIRST_AGENT_ROLE;
       hireInput.reportsTo = null;
     }
@@ -4620,7 +4622,7 @@ export function agentRoutes(
       const status = requiresApproval ? "pending_approval" : "idle";
       const managedHireBinding = normalizedHireInput.runtimeConfig?.aiConnection ? aiConnectionBindingSchema.parse(normalizedHireInput.runtimeConfig.aiConnection) : undefined;
       const managedHireConnectionId = managedHireBinding ? await validateManagedAgentBinding(req, companyId, hiredAgentId, normalizedHireInput.adapterType, normalizedHireInput.adapterConfig, managedHireBinding, normalizedHireInput.defaultEnvironmentId, false, true) : undefined;
-      const createdAgent = await svc.create(
+      let createdAgent = await svc.create(
         companyId,
         {
           id: hiredAgentId,
@@ -4650,6 +4652,20 @@ export function agentRoutes(
           },
         },
       );
+      // Another first-agent request may have founded the company meanwhile.
+      // Settle before the approval records the role it will replay.
+      if (hireIsFirstAgent) {
+        const settled = await settleFoundingCeo(db, {
+          companyId,
+          agentId: createdAgent.id,
+          fallbackRole: hireRequestedRole,
+        });
+        if (settled.demoted) {
+          normalizedHireInput.role = hireRequestedRole;
+          normalizedHireInput.reportsTo = settled.founderId;
+          createdAgent = (await svc.getById(createdAgent.id)) ?? createdAgent;
+        }
+      }
       const onboardingFirstAgentBundle = await resolveOnboardingFirstAgentBundle({
         onboardingFirstAgent: hireOnboardingFirstAgent,
         actorType: req.actor.type,
@@ -4819,7 +4835,9 @@ export function agentRoutes(
     } = req.body;
     // The company's first agent is its CEO whatever it is named or the client
     // asked for (see the hire route).
-    if (await companyAwaitsFirstAgent(db, companyId)) {
+    const createRequestedRole = createInput.role;
+    const createIsFirstAgent = await companyAwaitsFirstAgent(db, companyId);
+    if (createIsFirstAgent) {
       createInput.role = FIRST_AGENT_ROLE;
       createInput.reportsTo = null;
     }
@@ -4880,7 +4898,7 @@ export function agentRoutes(
 
     const managedBinding = normalizedRuntimeConfig.aiConnection ? aiConnectionBindingSchema.parse(normalizedRuntimeConfig.aiConnection) : undefined;
     const managedConnectionId = managedBinding ? await validateManagedAgentBinding(req, companyId, agentId, createInput.adapterType, normalizedAdapterConfig, managedBinding, createInput.defaultEnvironmentId, false, true) : undefined;
-    const createdAgent = await svc.create(
+    let createdAgent = await svc.create(
       companyId,
       {
         id: agentId,
@@ -4903,6 +4921,15 @@ export function agentRoutes(
         },
       },
     );
+    // Another first-agent request may have founded the company meanwhile.
+    if (createIsFirstAgent) {
+      const settled = await settleFoundingCeo(db, {
+        companyId,
+        agentId: createdAgent.id,
+        fallbackRole: createRequestedRole,
+      });
+      if (settled.demoted) createdAgent = (await svc.getById(createdAgent.id)) ?? createdAgent;
+    }
     const onboardingFirstAgentBundle = await resolveOnboardingFirstAgentBundle({
       onboardingFirstAgent: createOnboardingFirstAgent,
       actorType: req.actor.type,
@@ -4974,11 +5001,19 @@ export function agentRoutes(
         res.status(403).json({ error: "Only CEO can manage permissions" });
         return;
       }
+      // Join approval acts for the board, so only the board may give or take
+      // it. The CEO cannot switch it back on for itself or anyone else.
+      if (req.body.canApproveJoins !== undefined) {
+        res.status(403).json({ error: "Only a board member can change who approves join requests" });
+        return;
+      }
     } else {
       await assertBoardCanManageAgentsForCompany(req, existing.companyId);
     }
 
-    const agent = await svc.updatePermissions(id, req.body);
+    // `canApproveJoins` is a grant, not a stored agent permission flag.
+    const { canApproveJoins, ...permissionPatch } = req.body;
+    const agent = await svc.updatePermissions(id, permissionPatch);
     if (!agent) {
       res.status(404).json({ error: "Agent not found" });
       return;
@@ -4986,6 +5021,12 @@ export function agentRoutes(
 
     const effectiveCanAssignTasks =
       agent.role === "ceo" || Boolean(agent.permissions?.canCreateAgents) || req.body.canAssignTasks;
+    const grantedByUserId = req.actor.type === "board" ? (req.actor.userId ?? null) : null;
+    // Recorded as an explicit decision: turning a permission off is durable,
+    // and only a person can turn a revoked permission back on.
+    const decidedBy = req.actor.type === "agent"
+      ? { actorType: "agent" as const, actorId: req.actor.agentId ?? "unknown-agent" }
+      : { actorType: "user" as const, actorId: req.actor.userId ?? "board" };
     await access.ensureMembership(agent.companyId, "agent", agent.id, "member", "active");
     await access.setPrincipalPermission(
       agent.companyId,
@@ -4993,8 +5034,22 @@ export function agentRoutes(
       agent.id,
       "tasks:assign",
       effectiveCanAssignTasks,
-      req.actor.type === "board" ? (req.actor.userId ?? null) : null,
+      grantedByUserId,
+      null,
+      { decidedBy },
     );
+    if (canApproveJoins !== undefined) {
+      await access.setPrincipalPermission(
+        agent.companyId,
+        "agent",
+        agent.id,
+        "joins:approve",
+        canApproveJoins,
+        grantedByUserId,
+        null,
+        { decidedBy },
+      );
+    }
 
     const actor = getActorInfo(req);
     await logActivity(db, {
@@ -5011,6 +5066,7 @@ export function agentRoutes(
         canCreateAgents: agent.permissions?.canCreateAgents ?? false,
         canCreateSkills: agent.permissions?.canCreateSkills ?? true,
         canAssignTasks: effectiveCanAssignTasks,
+        ...(canApproveJoins !== undefined ? { canApproveJoins } : {}),
         trustPreset: agent.permissions?.trustPreset ?? "standard",
       },
     });

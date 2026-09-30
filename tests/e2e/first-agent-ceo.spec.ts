@@ -91,6 +91,29 @@ async function createAgentJoinRequest(board: APIRequestContext, companyId: strin
   return (await acceptResponse.json()) as { id: string; claimSecret: string };
 }
 
+/** Found a company through an agent join, and give the founder (the CEO) an API key. */
+async function foundCompanyWithExternalCeo(board: APIRequestContext) {
+  const companyResponse = await board.post("/api/companies", {
+    data: { name: `E2E Revocation ${Date.now()}` },
+  });
+  await expectOk(companyResponse, "create company");
+  const company = (await companyResponse.json()) as { id: string; issuePrefix: string };
+  const founderRequest = await createAgentJoinRequest(board, company.id, "OpenClaw");
+  const approve = await board.post(`/api/companies/${company.id}/join-requests/${founderRequest.id}/approve`);
+  await expectOk(approve, "board approves the founding agent");
+  const { createdAgentId: ceoId } = (await approve.json()) as { createdAgentId: string };
+  const claim = await board.post(`/api/join-requests/${founderRequest.id}/claim-api-key`, {
+    data: { claimSecret: founderRequest.claimSecret },
+  });
+  await expectOk(claim, "CEO claims its API key");
+  const { token } = (await claim.json()) as { token: string };
+  const ceoApi = await pwRequest.newContext({
+    baseURL: BASE_URL,
+    extraHTTPHeaders: { Authorization: `Bearer ${token}` },
+  });
+  return { company, ceoId, ceoApi };
+}
+
 test.describe("First agent is the company CEO", () => {
   test("the onboarding wizard hires its first agent as CEO whatever it is named", async ({ page }) => {
     const pageErrors: string[] = [];
@@ -199,7 +222,19 @@ test.describe("First agent is the company CEO", () => {
           data: { claimSecret: workerRequest.claimSecret },
         });
         await expectOk(workerClaim, "CEO-approved researcher claims its API key");
-        expect(((await workerClaim.json()) as { agentId: string }).agentId).toBe(workerId);
+        const workerKey = (await workerClaim.json()) as { agentId: string; token: string };
+        expect(workerKey.agentId).toBe(workerId);
+        // The key must authenticate, not just exist.
+        const workerApi = await pwRequest.newContext({
+          baseURL: BASE_URL,
+          extraHTTPHeaders: { Authorization: `Bearer ${workerKey.token}` },
+        });
+        try {
+          const me = await workerApi.get(`/api/companies/${company.id}/agents`);
+          await expectOk(me, "CEO-approved researcher uses its API key");
+        } finally {
+          await workerApi.dispose();
+        }
 
         // Board approvals stay with the board: the CEO can ask for one but
         // cannot grant its own request.
@@ -219,6 +254,53 @@ test.describe("First agent is the company CEO", () => {
       }
     } finally {
       await board.dispose();
+    }
+  });
+  test("a board member's revoke of the CEO's join approval sticks until the board restores it", async ({ page }) => {
+    const board = page.request;
+    const { company, ceoId, ceoApi } = await foundCompanyWithExternalCeo(board);
+    try {
+      // The board turns the switch off on the CEO's permissions page.
+      await page.goto(`/${company.issuePrefix}/agents/${ceoId}/permissions`);
+      const joinSwitch = page
+        .getByText("Can approve agent join requests", { exact: true })
+        .locator("xpath=../..")
+        .getByRole("switch");
+      await expect(joinSwitch).toHaveAttribute("aria-checked", "true", { timeout: 20_000 });
+      const saved = page.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname.endsWith(`/agents/${ceoId}/permissions`)
+          && response.request().method() === "PATCH",
+      );
+      await joinSwitch.click();
+      expect((await saved).ok()).toBe(true);
+      await expect(joinSwitch).toHaveAttribute("aria-checked", "false");
+
+      // The CEO cannot switch it back on for itself.
+      const selfRestore = await ceoApi.patch(`/api/agents/${ceoId}/permissions`, {
+        data: { canCreateAgents: true, canAssignTasks: true, canApproveJoins: true },
+      });
+      expect(selfRestore.status()).toBe(403);
+
+      // Creating another agent re-applies the root-CEO defaults. That must not
+      // bring the revoked permission back.
+      const hire = await board.post(`/api/companies/${company.id}/agents`, {
+        data: { name: "Analyst", role: "researcher", adapterType: "process", adapterConfig: {} },
+      });
+      await expectOk(hire, "board creates another agent");
+      const pending = await createAgentJoinRequest(board, company.id, "Researcher");
+      const refused = await ceoApi.post(`/api/companies/${company.id}/join-requests/${pending.id}/approve`);
+      expect(refused.status()).toBe(403);
+
+      // Only the board brings it back.
+      await page.reload();
+      await expect(joinSwitch).toHaveAttribute("aria-checked", "false", { timeout: 20_000 });
+      await joinSwitch.click();
+      await expect(joinSwitch).toHaveAttribute("aria-checked", "true");
+      const allowed = await ceoApi.post(`/api/companies/${company.id}/join-requests/${pending.id}/approve`);
+      await expectOk(allowed, "CEO approves after the board restored the permission");
+    } finally {
+      await ceoApi.dispose();
     }
   });
 });

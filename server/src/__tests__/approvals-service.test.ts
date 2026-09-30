@@ -17,6 +17,14 @@ vi.mock("../services/hire-hook.js", () => ({
   notifyHireApproved: mockNotifyHireApproved,
 }));
 
+// These tests use a database stub; the first-agent CEO rule has its own
+// database-backed coverage in first-agent-ceo-routes.test.ts.
+vi.mock("../services/first-agent-ceo.js", () => ({
+  FIRST_AGENT_ROLE: "ceo",
+  companyAwaitsFirstAgent: vi.fn(async () => false),
+  settleFoundingCeo: vi.fn(),
+}));
+
 type ApprovalRecord = {
   id: string;
   companyId: string;

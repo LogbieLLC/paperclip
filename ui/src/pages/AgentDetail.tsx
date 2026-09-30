@@ -1,6 +1,7 @@
 import type { AgentInstructionCandidate, AgentInstructionsBundle } from "@paperclipai/shared";
 import { InstructionHistory } from "../components/InstructionHistory";
 import { AgentCharacter } from "../components/AgentCharacter";
+import { JoinApprovalPermissionRow } from "../components/JoinApprovalPermissionRow";
 import { characterStateForAgent } from "@paperclipai/shared";
 import { mergeRunLogChunks, readChunkSeq } from "../lib/run-log-chunks";
 import { getPageVisibility, usePageVisibility } from "../lib/page-visibility";
@@ -2167,6 +2168,18 @@ export function ConfigurationTab({
               disabled={updatePermissions.isPending || taskAssignLocked}
             />
           </div>
+          <JoinApprovalPermissionRow
+            grants={agent.access?.grants}
+            disabled={updatePermissions.isPending}
+            onChange={(canApproveJoins) =>
+              updatePermissions.mutate({
+                canCreateAgents,
+                canCreateSkills,
+                canAssignTasks,
+                canApproveJoins,
+              })
+            }
+          />
         </div>
       </div> : null}
     </div>

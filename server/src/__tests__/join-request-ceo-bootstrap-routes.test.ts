@@ -1,10 +1,11 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import express from "express";
 import request from "supertest";
 import { and, eq } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   activityLog,
+  agentApiKeys,
   agents,
   companies,
   companyMemberships,
@@ -151,6 +152,7 @@ describeEmbeddedPostgres("join request approval bootstraps and empowers the comp
 
   afterEach(async () => {
     await db.delete(activityLog);
+    await db.delete(agentApiKeys);
     await db.delete(joinRequests);
     await db.delete(invites);
     await db.delete(principalPermissionGrants);
@@ -312,5 +314,106 @@ describeEmbeddedPostgres("join request approval bootstraps and empowers the comp
       .send({});
 
     expect(res.status).toBe(403);
+  }, 30_000);
+  it("gives an agent the CEO approves a key with a responsible user, so the key can authenticate", async () => {
+    const company = await seedCompany(db);
+    const ceoId = await seedCeo(company.id);
+    const { agentService } = await import("../services/agents.js");
+    const ceoKey = await agentService(db).createApiKey(ceoId, "ceo-key", { kind: "standard" }, {
+      responsibleUserId: "board-user",
+    });
+    const joinRequest = await seedJoinRequest(db, company.id, { requestType: "agent", agentName: "Researcher" });
+    const claimSecret = "researcher-claim-secret-0123456789";
+    await db
+      .update(joinRequests)
+      .set({
+        claimSecretHash: createHash("sha256").update(claimSecret).digest("hex"),
+        claimSecretExpiresAt: new Date(Date.now() + 60 * 60 * 1000),
+      })
+      .where(eq(joinRequests.id, joinRequest.id));
+
+    const approve = await request(await createApp(db, {
+      type: "agent",
+      agentId: ceoId,
+      companyId: company.id,
+      keyId: ceoKey.id,
+      runId: null,
+      source: "agent_key",
+    }))
+      .post(`/api/companies/${company.id}/join-requests/${joinRequest.id}/approve`)
+      .send({});
+    expect(approve.status, JSON.stringify(approve.body)).toBe(200);
+
+    const claim = await request(await createApp(db, boardActor(company.id)))
+      .post(`/api/join-requests/${joinRequest.id}/claim-api-key`)
+      .send({ claimSecret });
+    expect(claim.status, JSON.stringify(claim.body)).toBe(201);
+    const [key] = await db.select().from(agentApiKeys).where(eq(agentApiKeys.id, claim.body.keyId));
+    expect(key!.responsibleUserId).toBe("board-user");
+  }, 30_000);
+
+  it("refuses to file a joining agent under a CEO that is still awaiting board approval", async () => {
+    const company = await seedCompany(db);
+    await db.insert(agents).values({
+      companyId: company.id,
+      name: "Pending CEO",
+      role: "ceo",
+      status: "pending_approval",
+      adapterType: "process",
+    });
+    const joinRequest = await seedJoinRequest(db, company.id, { requestType: "agent" });
+
+    const res = await request(await createApp(db, boardActor(company.id)))
+      .post(`/api/companies/${company.id}/join-requests/${joinRequest.id}/approve`)
+      .send({});
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toContain("awaiting board approval");
+    const created = await db.select().from(agents).where(eq(agents.companyId, company.id));
+    expect(created).toHaveLength(1);
+  }, 30_000);
+
+  it("makes only one founding CEO when two first agent joins are approved at the same time", async () => {
+    const company = await seedCompany(db);
+    const first = await seedJoinRequest(db, company.id, { requestType: "agent", agentName: "Claw One" });
+    const second = await seedJoinRequest(db, company.id, { requestType: "agent", agentName: "Claw Two" });
+    const app = await createApp(db, boardActor(company.id));
+
+    const [a, b] = await Promise.all([
+      request(app).post(`/api/companies/${company.id}/join-requests/${first.id}/approve`).send({}),
+      request(app).post(`/api/companies/${company.id}/join-requests/${second.id}/approve`).send({}),
+    ]);
+    expect(a.status, JSON.stringify(a.body)).toBe(200);
+    expect(b.status, JSON.stringify(b.body)).toBe(200);
+
+    const rows = await db.select().from(agents).where(eq(agents.companyId, company.id));
+    const ceos = rows.filter((row) => row.role === "ceo" && row.reportsTo === null);
+    expect(ceos).toHaveLength(1);
+    const other = rows.find((row) => row.id !== ceos[0]!.id)!;
+    expect(other.reportsTo).toBe(ceos[0]!.id);
+    expect(await grantKeys(db, company.id, ceos[0]!.id)).toContain("joins:approve");
+    expect(await grantKeys(db, company.id, other.id)).not.toContain("joins:approve");
+  }, 30_000);
+
+  it("finishes an interrupted approval with the agent it already created instead of making a second one", async () => {
+    const company = await seedCompany(db);
+    const joinRequest = await seedJoinRequest(db, company.id, { requestType: "agent", agentName: "OpenClaw" });
+    // A previous attempt created the founder and recorded it, then failed
+    // before it could mark the request approved.
+    const [founder] = await db
+      .insert(agents)
+      .values({ companyId: company.id, name: "OpenClaw", role: "ceo", status: "idle", adapterType: "openclaw_gateway" })
+      .returning();
+    await db.update(joinRequests).set({ createdAgentId: founder!.id }).where(eq(joinRequests.id, joinRequest.id));
+
+    const res = await request(await createApp(db, boardActor(company.id)))
+      .post(`/api/companies/${company.id}/join-requests/${joinRequest.id}/approve`)
+      .send({});
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.createdAgentId).toBe(founder!.id);
+    const rows = await db.select().from(agents).where(eq(agents.companyId, company.id));
+    expect(rows).toHaveLength(1);
+    expect(await grantKeys(db, company.id, founder!.id)).toContain("joins:approve");
   }, 30_000);
 });

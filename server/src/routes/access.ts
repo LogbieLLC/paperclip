@@ -89,7 +89,8 @@ import {
   logActivity,
   notifyHireApproved
 } from "../services/index.js";
-import { FIRST_AGENT_ROLE, isFirstCompanyAgent } from "../services/first-agent-ceo.js";
+import { FIRST_AGENT_ROLE, isFirstCompanyAgent, settleFoundingCeo } from "../services/first-agent-ceo.js";
+import { resolveResponsibleUserIdForActivity } from "../services/activity-log.js";
 import {
   grantsForHumanRole,
   normalizeHumanRole,
@@ -3046,6 +3047,15 @@ export function accessRoutes(
     if (!allowed) throw forbidden("Permission denied");
   }
 
+  // Who made an explicit permission edit. A person's edit can restore a
+  // revoked permission; an agent's edit cannot.
+  function permissionDecisionActor(req: Request) {
+    if (req.actor.type === "agent") {
+      return { actorType: "agent" as const, actorId: req.actor.agentId ?? "unknown-agent" };
+    }
+    return { actorType: "user" as const, actorId: req.actor.userId ?? "board" };
+  }
+
   // An agent holding joins:approve (the root CEO by default) decides AGENT join
   // requests on the board's behalf. A human join request grants company
   // membership and board access, so only a human may decide it.
@@ -3058,6 +3068,26 @@ export function accessRoutes(
   function joinDecisionUserId(req: Request) {
     if (req.actor.type === "agent") return null;
     return req.actor.userId ?? (isLocalImplicit(req) ? "local-board" : null);
+  }
+
+  // When an agent (the CEO) approves a join, the new agent's API key still
+  // needs an accountable person, or key authentication refuses it. Resolve the
+  // approving agent's own responsible user: its run, key, or the company
+  // default. A board decision is accountable through approvedByUserId.
+  async function joinDecisionResponsibleUserId(req: Request, companyId: string) {
+    if (req.actor.type !== "agent") return null;
+    const { actorType, actorId, agentId, runId, agentApiKeyId } = getActorInfo(req);
+    return resolveResponsibleUserIdForActivity(db, {
+      companyId,
+      actorType,
+      actorId,
+      agentId,
+      runId,
+      agentApiKeyId,
+      action: "join.approved",
+      entityType: "join_request",
+      entityId: "",
+    });
   }
 
   function joinDecisionActivityActor(req: Request) {
@@ -4279,54 +4309,92 @@ export function accessRoutes(
         );
       } else {
         assertLegacyAgentInviteAdapterType(existing.adapterType);
-        const existingAgents = await agents.list(companyId);
-        // The first agent to join an empty company becomes its CEO, so an
-        // external runtime (e.g. OpenClaw) can found a new company instead of
-        // waiting on a CEO that nothing would ever create.
-        const joinsAsFirstAgent = isFirstCompanyAgent(existingAgents);
-        const managerId = joinsAsFirstAgent
-          ? null
-          : resolveJoinRequestAgentManagerId(existingAgents);
-        if (!joinsAsFirstAgent && !managerId) {
-          throw conflict(
-            "Join request cannot be approved because this company has no active CEO. Promote an existing agent to the CEO role, then approve this request again."
+        // An earlier attempt may have created the agent and failed before it
+        // could mark the request approved. Finish with that agent rather than
+        // creating a second one.
+        const priorAgent = existing.createdAgentId
+          ? await agents.getById(existing.createdAgentId)
+          : null;
+        let joinedAgentId: string;
+        if (priorAgent && priorAgent.companyId === companyId && priorAgent.status !== "terminated") {
+          joinedAgentId = priorAgent.id;
+        } else {
+          const existingAgents = await agents.list(companyId);
+          // The first agent to join an empty company becomes its CEO, so an
+          // external runtime (e.g. OpenClaw) can found a new company instead of
+          // waiting on a CEO that nothing would ever create.
+          const joinsAsFirstAgent = isFirstCompanyAgent(existingAgents);
+          // A CEO still awaiting board approval cannot manage anyone yet.
+          const managerId = joinsAsFirstAgent
+            ? null
+            : resolveJoinRequestAgentManagerId(
+                existingAgents.filter((agent) => agent.status !== "pending_approval")
+              );
+          if (!joinsAsFirstAgent && !managerId) {
+            const ceoAwaitingApproval = existingAgents.some(
+              (agent) => agent.role === FIRST_AGENT_ROLE && agent.status === "pending_approval"
+            );
+            throw conflict(
+              ceoAwaitingApproval
+                ? "Join request cannot be approved yet because the company's CEO is still awaiting board approval. Approve the CEO first, then approve this request again."
+                : "Join request cannot be approved because this company has no active CEO. Promote an existing agent to the CEO role, then approve this request again."
+            );
+          }
+
+          const agentName = deduplicateAgentName(
+            existing.agentName ?? "New Agent",
+            existingAgents.map((a) => ({
+              id: a.id,
+              name: a.name,
+              status: a.status
+            }))
           );
+
+          const created = await agents.create(companyId, {
+            name: agentName,
+            role: joinsAsFirstAgent ? FIRST_AGENT_ROLE : "general",
+            title: null,
+            status: "idle",
+            reportsTo: managerId,
+            capabilities: existing.capabilities ?? null,
+            adapterType: existing.adapterType ?? "process",
+            adapterConfig:
+              existing.agentDefaultsPayload &&
+              typeof existing.agentDefaultsPayload === "object"
+                ? (existing.agentDefaultsPayload as Record<string, unknown>)
+                : {},
+            runtimeConfig: {},
+            budgetMonthlyCents: 0,
+            spentMonthlyCents: 0,
+            permissions: {},
+            lastHeartbeatAt: null,
+            metadata: null
+          });
+          joinedAgentId = created.id;
+          // Recorded at once so a retry after a later failure reuses this agent.
+          await db
+            .update(joinRequests)
+            .set({ createdAgentId: created.id, updatedAt: new Date() })
+            .where(
+              and(
+                eq(joinRequests.id, requestId),
+                eq(joinRequests.status, "pending_approval")
+              )
+            );
+          if (joinsAsFirstAgent) {
+            // Another first-agent request may have founded the company meanwhile.
+            await settleFoundingCeo(db, {
+              companyId,
+              agentId: created.id,
+              fallbackRole: "general"
+            });
+          }
         }
-
-        const agentName = deduplicateAgentName(
-          existing.agentName ?? "New Agent",
-          existingAgents.map((a) => ({
-            id: a.id,
-            name: a.name,
-            status: a.status
-          }))
-        );
-
-        const created = await agents.create(companyId, {
-          name: agentName,
-          role: joinsAsFirstAgent ? FIRST_AGENT_ROLE : "general",
-          title: null,
-          status: "idle",
-          reportsTo: managerId,
-          capabilities: existing.capabilities ?? null,
-          adapterType: existing.adapterType ?? "process",
-          adapterConfig:
-            existing.agentDefaultsPayload &&
-            typeof existing.agentDefaultsPayload === "object"
-              ? (existing.agentDefaultsPayload as Record<string, unknown>)
-              : {},
-          runtimeConfig: {},
-          budgetMonthlyCents: 0,
-          spentMonthlyCents: 0,
-          permissions: {},
-          lastHeartbeatAt: null,
-          metadata: null
-        });
-        createdAgentId = created.id;
+        createdAgentId = joinedAgentId;
         await access.ensureMembership(
           companyId,
           "agent",
-          created.id,
+          joinedAgentId,
           "member",
           "active"
         );
@@ -4336,7 +4404,7 @@ export function accessRoutes(
         await access.setPrincipalGrants(
           companyId,
           "agent",
-          created.id,
+          joinedAgentId,
           grants,
           req.actor.type === "agent" ? null : (req.actor.userId ?? null)
         );
@@ -4350,13 +4418,21 @@ export function accessRoutes(
         .set({
           status: "approved",
           approvedByUserId: joinDecisionUserId(req),
+          decisionResponsibleUserId: await joinDecisionResponsibleUserId(req, companyId),
           approvedAt: new Date(),
           createdAgentId,
           updatedAt: new Date()
         })
-        .where(eq(joinRequests.id, requestId))
+        // Only a still-pending request: a concurrent reject or approve wins.
+        .where(
+          and(
+            eq(joinRequests.id, requestId),
+            eq(joinRequests.status, "pending_approval")
+          )
+        )
         .returning()
-        .then((rows) => rows[0]);
+        .then((rows) => rows[0] ?? null);
+      if (!approved) throw conflict("Join request is not pending");
 
       await logActivity(db, {
         companyId,
@@ -4411,9 +4487,16 @@ export function accessRoutes(
           rejectedAt: new Date(),
           updatedAt: new Date()
         })
-        .where(eq(joinRequests.id, requestId))
+        // Only a still-pending request: a concurrent approve or reject wins.
+        .where(
+          and(
+            eq(joinRequests.id, requestId),
+            eq(joinRequests.status, "pending_approval")
+          )
+        )
         .returning()
-        .then((rows) => rows[0]);
+        .then((rows) => rows[0] ?? null);
+      if (!rejected) throw conflict("Join request is not pending");
 
       await logActivity(db, {
         companyId,
@@ -4486,7 +4569,13 @@ export function accessRoutes(
         joinRequest.createdAgentId,
         "initial-join-key",
         { kind: "standard" },
-        { responsibleUserId: joinRequest.approvedByUserId ?? joinRequest.requestingUserId ?? null },
+        {
+          responsibleUserId:
+            joinRequest.approvedByUserId
+            ?? joinRequest.decisionResponsibleUserId
+            ?? joinRequest.requestingUserId
+            ?? null,
+        },
       );
 
       await logActivity(db, {
@@ -4587,6 +4676,7 @@ export function accessRoutes(
           grants: req.body.grants ?? [],
         },
         req.actor.userId ?? null,
+        permissionDecisionActor(req),
       );
       if (!updated) throw notFound("Member not found");
 
@@ -4667,7 +4757,8 @@ export function accessRoutes(
         companyId,
         memberId,
         req.body.grants ?? [],
-        req.actor.userId ?? null
+        req.actor.userId ?? null,
+        permissionDecisionActor(req)
       );
       if (!updated) throw notFound("Member not found");
       await logActivity(db, {

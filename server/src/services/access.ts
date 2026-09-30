@@ -19,6 +19,11 @@ import { conflict } from "../errors.js";
 import { assertAssignableAgent } from "./agent-assignability.js";
 import { authorizationService, type AuthorizationActor, type AuthorizationResource } from "./authorization.js";
 import { ensureHumanRoleDefaultGrants } from "./principal-access-compatibility.js";
+import {
+  recordPermissionRevocations,
+  resolveGrantableKeys,
+  type PermissionDecisionActor,
+} from "./permission-revocations.js";
 
 type MembershipRow = typeof companyMemberships.$inferSelect;
 type GrantInput = {
@@ -442,16 +447,62 @@ export function accessService(db: Db) {
       .orderBy(sql`${companyMemberships.createdAt} asc`);
   }
 
+  /**
+   * An explicit edit of a principal's full grant list. Keys the edit removes
+   * are recorded as revoked, so no automatic path restores them. Keys it keeps
+   * or adds are granted, except that an agent's edit cannot restore a key
+   * someone revoked.
+   */
+  async function applyExplicitGrantDecision(
+    executor: Db,
+    principal: { companyId: string; principalType: string; principalId: string },
+    requestedGrants: GrantInput[],
+    decidedBy: PermissionDecisionActor,
+  ): Promise<GrantInput[]> {
+    const currentKeys = await executor
+      .select({ permissionKey: principalPermissionGrants.permissionKey })
+      .from(principalPermissionGrants)
+      .where(
+        and(
+          eq(principalPermissionGrants.companyId, principal.companyId),
+          eq(principalPermissionGrants.principalType, principal.principalType),
+          eq(principalPermissionGrants.principalId, principal.principalId),
+        ),
+      )
+      .then((rows) => rows.map((row) => row.permissionKey));
+    const grantable = await resolveGrantableKeys(
+      executor,
+      principal,
+      requestedGrants.map((grant) => grant.permissionKey),
+      decidedBy,
+    );
+    const requestedKeys = new Set(requestedGrants.map((grant) => grant.permissionKey as string));
+    await recordPermissionRevocations(
+      executor,
+      principal,
+      currentKeys.filter((key) => !requestedKeys.has(key)),
+      decidedBy,
+    );
+    return requestedGrants.filter((grant) => grantable.has(grant.permissionKey));
+  }
+
   async function setMemberPermissions(
     companyId: string,
     memberId: string,
-    grants: GrantInput[],
+    requestedGrants: GrantInput[],
     grantedByUserId: string | null,
+    decidedBy: PermissionDecisionActor = { actorType: "user", actorId: grantedByUserId ?? "board" },
   ) {
     const member = await getMemberById(companyId, memberId);
     if (!member) return null;
 
     await db.transaction(async (tx) => {
+      const grants = await applyExplicitGrantDecision(
+        tx as unknown as Db,
+        { companyId, principalType: member.principalType, principalId: member.principalId },
+        requestedGrants,
+        decidedBy,
+      );
       await tx
         .delete(principalPermissionGrants)
         .where(
@@ -489,6 +540,7 @@ export function accessService(db: Db) {
       grants: GrantInput[];
     },
     grantedByUserId: string | null,
+    decidedBy: PermissionDecisionActor = { actorType: "user", actorId: grantedByUserId ?? "board" },
   ) {
     return db.transaction(async (tx) => {
       await tx.execute(sql`
@@ -551,6 +603,12 @@ export function accessService(db: Db) {
         .returning()
         .then((rows) => rows[0] ?? existing);
 
+      const grants = await applyExplicitGrantDecision(
+        tx as unknown as Db,
+        { companyId, principalType: existing.principalType, principalId: existing.principalId },
+        data.grants,
+        decidedBy,
+      );
       await tx
         .delete(principalPermissionGrants)
         .where(
@@ -560,9 +618,9 @@ export function accessService(db: Db) {
             eq(principalPermissionGrants.principalId, existing.principalId),
           ),
         );
-      if (data.grants.length > 0) {
+      if (grants.length > 0) {
         await tx.insert(principalPermissionGrants).values(
-          data.grants.map((grant) => ({
+          grants.map((grant) => ({
             companyId,
             principalType: existing.principalType,
             principalId: existing.principalId,
@@ -906,10 +964,19 @@ export function accessService(db: Db) {
     companyId: string,
     principalType: PrincipalType,
     principalId: string,
-    grants: GrantInput[],
+    requestedGrants: GrantInput[],
     grantedByUserId: string | null,
   ) {
     await db.transaction(async (tx) => {
+      // An automatic replace (invite approval or replay, join approval, plugin)
+      // never restores a key someone revoked.
+      const grantable = await resolveGrantableKeys(
+        tx as unknown as Db,
+        { companyId, principalType, principalId },
+        requestedGrants.map((grant) => grant.permissionKey),
+        null,
+      );
+      const grants = requestedGrants.filter((grant) => grantable.has(grant.permissionKey));
       await tx
         .delete(principalPermissionGrants)
         .where(
@@ -995,7 +1062,16 @@ export function accessService(db: Db) {
     enabled: boolean,
     grantedByUserId: string | null,
     scope: Record<string, unknown> | null = null,
+    options: {
+      /**
+       * Who explicitly decided this. Omit for automatic grants (defaults,
+       * imports), which never restore a revoked key. A decision to disable is
+       * recorded as a revocation.
+       */
+      decidedBy?: PermissionDecisionActor;
+    } = {},
   ) {
+    const principal = { companyId, principalType, principalId };
     if (!enabled) {
       await db
         .delete(principalPermissionGrants)
@@ -1007,8 +1083,14 @@ export function accessService(db: Db) {
             eq(principalPermissionGrants.permissionKey, permissionKey),
           ),
         );
+      if (options.decidedBy) {
+        await recordPermissionRevocations(db, principal, [permissionKey], options.decidedBy);
+      }
       return;
     }
+
+    const grantable = await resolveGrantableKeys(db, principal, [permissionKey], options.decidedBy ?? null);
+    if (!grantable.has(permissionKey)) return;
 
     await ensureMembership(companyId, principalType, principalId, "member", "active");
 

@@ -24,6 +24,9 @@ export const joinRequests = pgTable(
     claimSecretConsumedAt: timestamp("claim_secret_consumed_at", { withTimezone: true }),
     createdAgentId: uuid("created_agent_id").references(() => agents.id),
     approvedByUserId: text("approved_by_user_id"),
+    // The person accountable for the agent this join creates when an agent
+    // (the CEO) decides the request. A board decision uses approvedByUserId.
+    decisionResponsibleUserId: text("decision_responsible_user_id"),
     approvedAt: timestamp("approved_at", { withTimezone: true }),
     rejectedByUserId: text("rejected_by_user_id"),
     rejectedAt: timestamp("rejected_at", { withTimezone: true }),

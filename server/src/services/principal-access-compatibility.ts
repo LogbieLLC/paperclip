@@ -3,6 +3,7 @@ import type { Db } from "@paperclipai/db";
 import { agents, companyMemberships, principalPermissionGrants } from "@paperclipai/db";
 import type { PermissionKey, PrincipalType } from "@paperclipai/shared";
 import { grantsForHumanRole, normalizeHumanRole } from "./company-member-roles.js";
+import { listRevokedPermissionKeys } from "./permission-revocations.js";
 
 type GrantInput = {
   permissionKey: PermissionKey;
@@ -24,13 +25,17 @@ export async function insertMissingPrincipalGrants(
     grantedByUserId: string | null;
   },
 ): Promise<number> {
-  if (input.grants.length === 0) return 0;
+  // Default grants (startup backfill, login sync, member copies) never restore
+  // a key someone revoked.
+  const revoked = await listRevokedPermissionKeys(db, input);
+  const grants = input.grants.filter((grant) => !revoked.has(grant.permissionKey));
+  if (grants.length === 0) return 0;
 
   const now = new Date();
   const inserted = await db
     .insert(principalPermissionGrants)
     .values(
-      input.grants.map((grant) => ({
+      grants.map((grant) => ({
         companyId: input.companyId,
         principalType: input.principalType,
         principalId: input.principalId,

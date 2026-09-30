@@ -5,6 +5,7 @@ import { approvalComments, approvals } from "@paperclipai/db";
 import { notFound, unprocessable } from "../errors.js";
 import { redactCurrentUserText } from "../log-redaction.js";
 import { agentService } from "./agents.js";
+import { companyAwaitsFirstAgent, FIRST_AGENT_ROLE, settleFoundingCeo } from "./first-agent-ceo.js";
 import { budgetService } from "./budgets.js";
 import { notifyHireApproved } from "./hire-hook.js";
 import { instanceSettingsService } from "./instance-settings.js";
@@ -159,12 +160,15 @@ export function approvalService(db: Db) {
           await reconcileApprovedBuiltInAgent(updated.companyId, payload);
           hireApprovedAgentId = payloadAgentId;
         } else {
+          // The company's first agent is its CEO, whatever the request asked.
+          const requestedRole = String(payload.role ?? "general");
+          const isFirstAgent = await companyAwaitsFirstAgent(db, updated.companyId);
           const created = await agentsSvc.create(updated.companyId, {
             name: String(payload.name ?? "New Agent"),
             appearance: payload.appearance == null ? undefined : agentAppearanceSchema.parse(payload.appearance),
-            role: String(payload.role ?? "general"),
+            role: isFirstAgent ? FIRST_AGENT_ROLE : requestedRole,
             title: typeof payload.title === "string" ? payload.title : null,
-            reportsTo: typeof payload.reportsTo === "string" ? payload.reportsTo : null,
+            reportsTo: isFirstAgent ? null : typeof payload.reportsTo === "string" ? payload.reportsTo : null,
             capabilities: typeof payload.capabilities === "string" ? payload.capabilities : null,
             adapterType: String(payload.adapterType ?? "process"),
             adapterConfig:
@@ -183,6 +187,13 @@ export function approvalService(db: Db) {
             lastHeartbeatAt: null,
           });
           hireApprovedAgentId = created?.id ?? null;
+          if (created && isFirstAgent) {
+            await settleFoundingCeo(db, {
+              companyId: updated.companyId,
+              agentId: created.id,
+              fallbackRole: requestedRole,
+            });
+          }
         }
         if (hireApprovedAgentId) {
           // A hire held for board approval (the company's first CEO among

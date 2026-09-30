@@ -93,6 +93,15 @@ Role-based human permission granularity is V1 — see the `humans-and-permission
 plan, the `principal_permission_grants` table, and the `PERMISSION_KEYS` set
 in `packages/shared/src/constants.ts`.
 
+A revoked permission stays revoked. When a person or agent explicitly removes a
+grant (the Members permission editor or the agent permissions switches), the
+server records it in `principal_permission_revocations`. Automatic grant paths
+never restore a recorded key: the startup backfill and login sync of human role
+defaults, member copies, root-CEO and built-in agent defaults, invite and join
+approvals and replays, plugins, and imports. The owner/admin `tools:*` role
+fallback also honors it. Only an explicit grant by a person clears the record;
+an agent's grant cannot, so no agent can reverse a board decision.
+
 ## 6. Architecture
 
 ## 6.1 Runtime Components
@@ -1357,7 +1366,7 @@ issue.
 
 Board can bypass request flow and create agents directly via UI; direct create is still logged as a governance action.
 
-The first agent a company gets is always its CEO (`role=ceo`, `reportsTo=null`), whatever it is named and whatever role the request carried. This holds for the onboarding wizard, direct create, hire requests, and agent join requests. Terminated agents and bundled built-in agents do not count as a first agent. The root CEO receives `agents:configure`, `skills:create`, and `joins:approve` grants on every path that activates it, so it can approve or reject further agent join requests on the board's behalf. Human join requests and `approvals` rows (hires, CEO strategy, budget overrides, board approval requests) remain board decisions.
+The first agent a company gets is always its CEO (`role=ceo`, `reportsTo=null`), whatever it is named and whatever role the request carried. This holds for the onboarding wizard, direct create, hire requests (including board-approved `hire_agent` approvals), and agent join requests. The server-side onboarding seed already creates its lead agent as `ceo`. A company import is exempt: it keeps the roles its package defines. Terminated agents and bundled built-in agents do not count as a first agent; an agent still awaiting approval does. If two first-agent requests overlap, the earliest becomes CEO and the later one keeps its requested role and reports to that CEO. A join cannot be approved while the only CEO is still awaiting board approval. When the CEO approves an agent join, the new agent's API key is accountable to the CEO's own responsible user. The root CEO receives `agents:configure`, `skills:create`, and `joins:approve` grants on every path that activates it, so it can approve or reject further agent join requests on the board's behalf. The board can turn join approval off or on for any agent with the "Can approve agent join requests" switch (`canApproveJoins` on `PATCH /agents/:id/permissions`); agents cannot change it. A revoked default is never re-granted automatically. Human join requests and `approvals` rows (hires, CEO strategy, budget overrides, board approval requests) remain board decisions.
 
 ## 12.2 CEO Strategy Approval
 
