@@ -66,6 +66,7 @@ const mockAccessService = vi.hoisted(() => ({
   getMembership: vi.fn(),
   ensureMembership: vi.fn(),
   listPrincipalGrants: vi.fn(),
+  isPermissionRevoked: vi.fn(),
   setPrincipalPermission: vi.fn(),
 }));
 
@@ -313,6 +314,8 @@ describe.sequential("agent permission routes", () => {
     mockAccessService.getMembership.mockReset();
     mockAccessService.ensureMembership.mockReset();
     mockAccessService.listPrincipalGrants.mockReset();
+    mockAccessService.isPermissionRevoked.mockReset();
+    mockAccessService.isPermissionRevoked.mockResolvedValue(false);
     mockAccessService.setPrincipalPermission.mockReset();
     mockApprovalService.create.mockReset();
     mockApprovalService.getById.mockReset();
@@ -1787,6 +1790,9 @@ describe.sequential("agent permission routes", () => {
       "tasks:assign",
       true,
       "board-user",
+      null,
+      // Follows the agent-creator role: an automatic grant, not a board decision.
+      {},
     );
     expect(res.body.access.canAssignTasks).toBe(true);
     expect(res.body.access.taskAssignSource).toBe("agent_creator");

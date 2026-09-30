@@ -611,7 +611,7 @@ describeEmbeddedPostgres("built-in agents", () => {
     expect(result.defaultGrantsEnsured).toBeGreaterThanOrEqual(4);
 
     const rootGrantKeys = await permissionKeysForAgent(root.id);
-    expect(rootGrantKeys).toEqual(expect.arrayContaining(["agents:configure", "skills:create"]));
+    expect(rootGrantKeys).toEqual(expect.arrayContaining(["agents:configure", "skills:create", "joins:approve"]));
     expect(rootGrantKeys).not.toContain("agents:suggest-changes");
     expect(rootGrantKeys).not.toContain("skills:suggest-changes");
 

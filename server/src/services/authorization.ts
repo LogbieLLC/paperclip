@@ -30,6 +30,7 @@ import {
 import { logger } from "../middleware/logger.js";
 import { normalizeAgentPermissions } from "./agent-permissions.js";
 import { grantsForHumanRole, normalizeHumanRole } from "./company-member-roles.js";
+import { isPermissionRevoked } from "./permission-revocations.js";
 
 export type AuthorizationActor =
   {
@@ -684,6 +685,8 @@ export function authorizationService(db: Db | DbTransaction) {
         && (membership.membershipRole === "owner" || membership.membershipRole === "admin")
         && grantsForHumanRole(normalizeHumanRole(membership.membershipRole, "operator"))
           .some((defaultGrant) => defaultGrant.permissionKey === input.permissionKey)
+        // A role default never overrides a deliberate revocation.
+        && !(await isPermissionRevoked(db, input, input.permissionKey))
       ) {
         return allow({
           action: input.action,

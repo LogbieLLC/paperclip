@@ -1956,6 +1956,7 @@ describeEmbeddedPostgres("tool access service", () => {
             departingMembership.id,
             { status: "suspended", grants: [] },
             "owner",
+            { actorType: "user", actorId: "owner" },
           );
         } else if (cleanupKind === "archive") {
           await access.archiveMember(company.id, departingMembership.id);

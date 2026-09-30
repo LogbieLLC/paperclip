@@ -82,7 +82,10 @@ export interface AgentHireResponse {
 export interface AgentPermissionUpdate {
   canCreateAgents: boolean;
   canCreateSkills: boolean;
-  canAssignTasks: boolean;
+  /** Omit to leave task assignment unchanged; only its own switch sends it. */
+  canAssignTasks?: boolean;
+  /** Board-only: grants or revokes the agent's `joins:approve` permission. */
+  canApproveJoins?: boolean;
   trustPreset?: AgentPermissions["trustPreset"];
   authorizationPolicy?: AgentPermissions["authorizationPolicy"];
 }

@@ -91,6 +91,7 @@ import {
 } from "../services/index.js";
 import { badRequest, conflict, forbidden, HttpError, notFound, unprocessable } from "../errors.js";
 import { ONBOARDING_FIRST_TASK_SKILL_KEY, PAPERCLIP_CORE_SKILL_KEYS } from "../services/company-skills.js";
+import { FIRST_AGENT_ROLE, withFirstAgentDecision } from "../services/first-agent-ceo.js";
 import { createRunSecretRedactionRegistry } from "../services/run-secret-redaction.js";
 import { assertAuthenticated, assertBoard, assertCompanyAccess, assertInstanceAdmin, buildActorSecretContext, getAccessibleResource, getActorInfo, hasCompanyAccess } from "./authz.js";
 import { runAdapterLoginStartSpine } from "./adapter-login-route-spine.js";
@@ -1601,6 +1602,20 @@ export function agentRoutes(
       ? await access.listPrincipalGrants(agent.companyId, "agent", agent.id)
       : [];
     const hasExplicitTaskAssignGrant = grants.some((grant) => grant.permissionKey === "tasks:assign");
+
+    // A board member turned task assignment off. Show it off, whatever the
+    // role, so the switch can turn it back on and other switches send `false`.
+    if (
+      !hasExplicitTaskAssignGrant &&
+      (await access.isPermissionRevoked(agent.companyId, "agent", agent.id, "tasks:assign"))
+    ) {
+      return {
+        canAssignTasks: false,
+        taskAssignSource: "revoked" as const,
+        membership,
+        grants,
+      };
+    }
 
     if (agent.role === "ceo") {
       return {
@@ -4496,6 +4511,9 @@ export function agentRoutes(
       hireInput.adapterConfig = inheritNativeRunnerAdapterConfig(caller.adapterConfig);
       hireInput.defaultEnvironmentId = caller.defaultEnvironmentId ?? null;
     }
+    // The company's first agent is its CEO whatever it is named or the client
+    // asked for. Resolved before the role-driven skill defaults below so the
+    // CEO also receives the core CEO skills.
     hireInput.adapterType = await assertSelectableAdapterType(hireInput.adapterType);
     const rawHireAdapterConfig = (hireInput.adapterConfig ?? {}) as Record<string, unknown>;
     assertProviderTraceSettingTransition(req, hireInput.runtimeConfig);
@@ -4532,25 +4550,32 @@ export function agentRoutes(
       name: hireInput.name,
       adapterConfig: requestedAdapterConfig,
     });
-    const desiredSkillAssignment = await resolveDesiredSkillAssignment(
-      companyId,
-      hireInput.adapterType,
-      requestedAdapterConfig,
-      withDefaultRoleSkillSelections(
-        normalizeDesiredSkillSelections(Array.isArray(requestedDesiredSkills) ? requestedDesiredSkills : undefined),
-        defaultRoleSkillSelections(
-          hireInput.role,
-          hireInput.adapterType,
-          hireOnboardingFirstAgent === true && req.actor.type === "board",
+    // Role-driven skill defaults. Re-run for the CEO role only when the
+    // first-agent decision below files this hire as the company's CEO.
+    const resolveHireSkills = async (role: string) => {
+      const assignment = await resolveDesiredSkillAssignment(
+        companyId,
+        hireInput.adapterType,
+        requestedAdapterConfig,
+        withDefaultRoleSkillSelections(
+          normalizeDesiredSkillSelections(Array.isArray(requestedDesiredSkills) ? requestedDesiredSkills : undefined),
+          defaultRoleSkillSelections(
+            role,
+            hireInput.adapterType,
+            hireOnboardingFirstAgent === true && req.actor.type === "board",
+          ),
         ),
-      ),
-      "add",
-    );
-    const normalizedAdapterConfig = await normalizeMediatedAdapterConfigForPersistence({
-      companyId,
-      adapterType: hireInput.adapterType,
-      adapterConfig: desiredSkillAssignment.adapterConfig,
-    });
+        "add",
+      );
+      const adapterConfig = await normalizeMediatedAdapterConfigForPersistence({
+        companyId,
+        adapterType: hireInput.adapterType,
+        adapterConfig: assignment.adapterConfig,
+      });
+      return { assignment, adapterConfig };
+    };
+    let { assignment: desiredSkillAssignment, adapterConfig: normalizedAdapterConfig } =
+      await resolveHireSkills(hireInput.role);
     const normalizedRuntimeConfig = await normalizeCreatedAgentRuntimeConfig(req, companyId, hireInput.adapterType, normalizedAdapterConfig, hireInput.runtimeConfig);
     const normalizedHireInput = {
       ...hireInput,
@@ -4612,36 +4637,49 @@ export function agentRoutes(
       const status = requiresApproval ? "pending_approval" : "idle";
       const managedHireBinding = normalizedHireInput.runtimeConfig?.aiConnection ? aiConnectionBindingSchema.parse(normalizedHireInput.runtimeConfig.aiConnection) : undefined;
       const managedHireConnectionId = managedHireBinding ? await validateManagedAgentBinding(req, companyId, hiredAgentId, normalizedHireInput.adapterType, normalizedHireInput.adapterConfig, managedHireBinding, normalizedHireInput.defaultEnvironmentId, false, true) : undefined;
-      const createdAgent = await svc.create(
-        companyId,
-        {
-          id: hiredAgentId,
-          ...normalizedHireInput,
-          status,
-          spentMonthlyCents: 0,
-          lastHeartbeatAt: null,
-        },
-        {
-          aiConnectionInstall: managedHireConnectionId ? { connectionId: managedHireConnectionId, createdByUserId: responsibleUserForAiRequest(req) } : undefined,
-          claudeLogin: {
-            storedSessionId: hireStoredSessionId ?? null,
-            ownerUserId: req.actor.type === "agent" ? null : (req.actor.userId ?? null),
-            // The apply-existing path runs only for a user actor. The owner comes
-            // from the actor, so an agent actor never reaches the no-claim bind.
-            applyExistingWithoutClaim:
-              req.actor.type !== "agent" && hireApplyStoredClaudeLogin === true,
-            // Set only when an agent actor hired this child and the merge above
-            // inherited the parent's fixed Claude OAuth reference. The service
-            // re-reads this named parent inside the write transaction before it
-            // permits the bind, so this identifier is a claim to verify, not a
-            // trusted value.
-            inheritedFromAgentId:
-              req.actor.type === "agent" && authInheritance.inheritedFixedClaudeOAuthBinding
-                ? req.actor.agentId
-                : null,
+      // The company's first agent is its CEO whatever it is named or the
+      // client asked for. The decision is made, and the agent inserted, under
+      // a company lock, so overlapping first hires cannot both become CEO and
+      // only the CEO receives the CEO skills. It runs before the approval
+      // records the role it will replay.
+      const createdAgent = await withFirstAgentDecision(db, companyId, async (isFirstAgent) => {
+        if (isFirstAgent) {
+          normalizedHireInput.role = FIRST_AGENT_ROLE;
+          normalizedHireInput.reportsTo = null;
+          ({ assignment: desiredSkillAssignment, adapterConfig: normalizedHireInput.adapterConfig } =
+            await resolveHireSkills(FIRST_AGENT_ROLE));
+        }
+        return svc.create(
+          companyId,
+          {
+            id: hiredAgentId,
+            ...normalizedHireInput,
+            status,
+            spentMonthlyCents: 0,
+            lastHeartbeatAt: null,
           },
-        },
-      );
+          {
+            aiConnectionInstall: managedHireConnectionId ? { connectionId: managedHireConnectionId, createdByUserId: responsibleUserForAiRequest(req) } : undefined,
+            claudeLogin: {
+              storedSessionId: hireStoredSessionId ?? null,
+              ownerUserId: req.actor.type === "agent" ? null : (req.actor.userId ?? null),
+              // The apply-existing path runs only for a user actor. The owner comes
+              // from the actor, so an agent actor never reaches the no-claim bind.
+              applyExistingWithoutClaim:
+                req.actor.type !== "agent" && hireApplyStoredClaudeLogin === true,
+              // Set only when an agent actor hired this child and the merge above
+              // inherited the parent's fixed Claude OAuth reference. The service
+              // re-reads this named parent inside the write transaction before it
+              // permits the bind, so this identifier is a claim to verify, not a
+              // trusted value.
+              inheritedFromAgentId:
+                req.actor.type === "agent" && authInheritance.inheritedFixedClaudeOAuthBinding
+                  ? req.actor.agentId
+                  : null,
+            },
+          },
+        );
+      });
       const onboardingFirstAgentBundle = await resolveOnboardingFirstAgentBundle({
         onboardingFirstAgent: hireOnboardingFirstAgent,
         actorType: req.actor.type,
@@ -4745,6 +4783,11 @@ export function agentRoutes(
         agent.id,
         actor.actorType === "user" ? actor.actorId : null,
       );
+      // A hire can be the company's root CEO (the onboarding wizard hires its
+      // first agent here), so apply the root-CEO defaults the create route
+      // applies. A hire still pending board approval receives them when the
+      // approval is granted.
+      await builtInAgentService(db).ensureCompanyDefaultAgentGrants(companyId);
 
       if (approval) {
         await logActivity(db, {
@@ -4804,6 +4847,8 @@ export function agentRoutes(
       onboardingFirstAgent: createOnboardingFirstAgent,
       ...createInput
     } = req.body;
+    // The company's first agent is its CEO whatever it is named or the client
+    // asked for (see the hire route).
     createInput.adapterType = await assertSelectableAdapterType(createInput.adapterType);
     const rawCreateAdapterConfig = (createInput.adapterConfig ?? {}) as Record<string, unknown>;
     assertProviderTraceSettingTransition(req, createInput.runtimeConfig);
@@ -4833,25 +4878,32 @@ export function agentRoutes(
       name: createInput.name,
       adapterConfig: requestedAdapterConfig,
     });
-    const desiredSkillAssignment = await resolveDesiredSkillAssignment(
-      companyId,
-      createInput.adapterType,
-      requestedAdapterConfig,
-      withDefaultRoleSkillSelections(
-        normalizeDesiredSkillSelections(Array.isArray(requestedDesiredSkills) ? requestedDesiredSkills : undefined),
-        defaultRoleSkillSelections(
-          createInput.role,
-          createInput.adapterType,
-          createOnboardingFirstAgent === true && req.actor.type === "board",
+    // See the hire route: re-run for the CEO role only if this agent becomes
+    // the company's first agent.
+    const resolveCreateSkills = async (role: string) => {
+      const assignment = await resolveDesiredSkillAssignment(
+        companyId,
+        createInput.adapterType,
+        requestedAdapterConfig,
+        withDefaultRoleSkillSelections(
+          normalizeDesiredSkillSelections(Array.isArray(requestedDesiredSkills) ? requestedDesiredSkills : undefined),
+          defaultRoleSkillSelections(
+            role,
+            createInput.adapterType,
+            createOnboardingFirstAgent === true && req.actor.type === "board",
+          ),
         ),
-      ),
-      "add",
-    );
-    const normalizedAdapterConfig = await normalizeMediatedAdapterConfigForPersistence({
-      companyId,
-      adapterType: createInput.adapterType,
-      adapterConfig: desiredSkillAssignment.adapterConfig,
-    });
+        "add",
+      );
+      const adapterConfig = await normalizeMediatedAdapterConfigForPersistence({
+        companyId,
+        adapterType: createInput.adapterType,
+        adapterConfig: assignment.adapterConfig,
+      });
+      return { assignment, adapterConfig };
+    };
+    let { assignment: desiredSkillAssignment, adapterConfig: normalizedAdapterConfig } =
+      await resolveCreateSkills(createInput.role);
     const normalizedRuntimeConfig = await normalizeCreatedAgentRuntimeConfig(req, companyId, createInput.adapterType, normalizedAdapterConfig, createInput.runtimeConfig);
     await assertAgentEnvironmentSelection(companyId, createInput.adapterType, createInput.defaultEnvironmentId);
     await assertAgentDefaultEnvironmentSelection(companyId, createInput.defaultEnvironmentId, {
@@ -4861,29 +4913,38 @@ export function agentRoutes(
 
     const managedBinding = normalizedRuntimeConfig.aiConnection ? aiConnectionBindingSchema.parse(normalizedRuntimeConfig.aiConnection) : undefined;
     const managedConnectionId = managedBinding ? await validateManagedAgentBinding(req, companyId, agentId, createInput.adapterType, normalizedAdapterConfig, managedBinding, createInput.defaultEnvironmentId, false, true) : undefined;
-    const createdAgent = await svc.create(
-      companyId,
-      {
-        id: agentId,
-        ...createInput,
-        adapterConfig: normalizedAdapterConfig,
-        runtimeConfig: normalizedRuntimeConfig,
-        status: "idle",
-        spentMonthlyCents: 0,
-        lastHeartbeatAt: null,
-      },
-      {
-        aiConnectionInstall: managedConnectionId ? { connectionId: managedConnectionId, createdByUserId: responsibleUserForAiRequest(req) } : undefined,
-        claudeLogin: {
-          storedSessionId: createStoredSessionId ?? null,
-          ownerUserId: req.actor.type === "agent" ? null : (req.actor.userId ?? null),
-          // The apply-existing path runs only for a user actor. The owner comes
-          // from the actor, so an agent actor never reaches the no-claim bind.
-          applyExistingWithoutClaim:
-            req.actor.type !== "agent" && createApplyStoredClaudeLogin === true,
+    // See the hire route: decide and insert under the company's first-agent lock.
+    const createdAgent = await withFirstAgentDecision(db, companyId, async (isFirstAgent) => {
+      if (isFirstAgent) {
+        createInput.role = FIRST_AGENT_ROLE;
+        createInput.reportsTo = null;
+        ({ assignment: desiredSkillAssignment, adapterConfig: normalizedAdapterConfig } =
+          await resolveCreateSkills(FIRST_AGENT_ROLE));
+      }
+      return svc.create(
+        companyId,
+        {
+          id: agentId,
+          ...createInput,
+          adapterConfig: normalizedAdapterConfig,
+          runtimeConfig: normalizedRuntimeConfig,
+          status: "idle",
+          spentMonthlyCents: 0,
+          lastHeartbeatAt: null,
         },
-      },
-    );
+        {
+          aiConnectionInstall: managedConnectionId ? { connectionId: managedConnectionId, createdByUserId: responsibleUserForAiRequest(req) } : undefined,
+          claudeLogin: {
+            storedSessionId: createStoredSessionId ?? null,
+            ownerUserId: req.actor.type === "agent" ? null : (req.actor.userId ?? null),
+            // The apply-existing path runs only for a user actor. The owner comes
+            // from the actor, so an agent actor never reaches the no-claim bind.
+            applyExistingWithoutClaim:
+              req.actor.type !== "agent" && createApplyStoredClaudeLogin === true,
+          },
+        },
+      );
+    });
     const onboardingFirstAgentBundle = await resolveOnboardingFirstAgentBundle({
       onboardingFirstAgent: createOnboardingFirstAgent,
       actorType: req.actor.type,
@@ -4955,27 +5016,75 @@ export function agentRoutes(
         res.status(403).json({ error: "Only CEO can manage permissions" });
         return;
       }
+      // Join approval acts for the board, so only the board may give or take
+      // it. The CEO cannot switch it back on for itself or anyone else.
+      if (req.body.canApproveJoins !== undefined) {
+        res.status(403).json({ error: "Only a board member can change who approves join requests" });
+        return;
+      }
+      // A permission a board member turned off stays off until a board
+      // member turns it back on. Refuse before changing anything.
+      if (
+        req.body.canAssignTasks &&
+        (await access.isPermissionRevoked(existing.companyId, "agent", existing.id, "tasks:assign"))
+      ) {
+        res.status(403).json({ error: "A board member turned off task assignment for this agent. Only a board member can turn it back on." });
+        return;
+      }
     } else {
       await assertBoardCanManageAgentsForCompany(req, existing.companyId);
     }
 
-    const agent = await svc.updatePermissions(id, req.body);
+    // `canApproveJoins` is a grant, not a stored agent permission flag.
+    const { canApproveJoins, ...permissionPatch } = req.body;
+    const agent = await svc.updatePermissions(id, permissionPatch);
     if (!agent) {
       res.status(404).json({ error: "Agent not found" });
       return;
     }
 
-    const effectiveCanAssignTasks =
-      agent.role === "ceo" || Boolean(agent.permissions?.canCreateAgents) || req.body.canAssignTasks;
+    // `canAssignTasks` is a decision only when the request names it; only the
+    // task assignment switch sends it, so a page loaded before a revoke
+    // cannot undo it. A CEO or an agent that can create agents also assigns
+    // tasks by role: that grant is automatic and never restores a revoked
+    // key, and the role cannot be switched off with `false`.
+    const requestedCanAssignTasks: boolean | undefined = req.body.canAssignTasks;
+    const taskAssignFollowsRole = agent.role === "ceo" || Boolean(agent.permissions?.canCreateAgents);
+    const taskAssignIsDecision =
+      requestedCanAssignTasks === true || (requestedCanAssignTasks === false && !taskAssignFollowsRole);
+    const effectiveCanAssignTasks = taskAssignFollowsRole || requestedCanAssignTasks === true;
+    const grantedByUserId = req.actor.type === "board" ? (req.actor.userId ?? null) : null;
+    // Recorded as an explicit decision: turning a permission off is durable,
+    // and only a person can turn a revoked permission back on.
+    const decidedBy = req.actor.type === "agent"
+      ? { actorType: "agent" as const, actorId: req.actor.agentId ?? "unknown-agent" }
+      : { actorType: "user" as const, actorId: req.actor.userId ?? "board" };
     await access.ensureMembership(agent.companyId, "agent", agent.id, "member", "active");
-    await access.setPrincipalPermission(
-      agent.companyId,
-      "agent",
-      agent.id,
-      "tasks:assign",
-      effectiveCanAssignTasks,
-      req.actor.type === "board" ? (req.actor.userId ?? null) : null,
-    );
+    // Omitted for an agent that does not assign tasks by role: no change.
+    const taskAssignApplied = taskAssignIsDecision || taskAssignFollowsRole
+      ? await access.setPrincipalPermission(
+        agent.companyId,
+        "agent",
+        agent.id,
+        "tasks:assign",
+        effectiveCanAssignTasks,
+        grantedByUserId,
+        null,
+        taskAssignIsDecision ? { decidedBy } : {},
+      )
+      : null;
+    if (canApproveJoins !== undefined) {
+      await access.setPrincipalPermission(
+        agent.companyId,
+        "agent",
+        agent.id,
+        "joins:approve",
+        canApproveJoins,
+        grantedByUserId,
+        null,
+        { decidedBy },
+      );
+    }
 
     const actor = getActorInfo(req);
     await logActivity(db, {
@@ -4991,7 +5100,9 @@ export function agentRoutes(
       details: {
         canCreateAgents: agent.permissions?.canCreateAgents ?? false,
         canCreateSkills: agent.permissions?.canCreateSkills ?? true,
-        canAssignTasks: effectiveCanAssignTasks,
+        // What was applied, when this update touched it: a revoked grant stays off.
+        ...(taskAssignApplied === null ? {} : { canAssignTasks: effectiveCanAssignTasks && taskAssignApplied }),
+        ...(canApproveJoins !== undefined ? { canApproveJoins } : {}),
         trustPreset: agent.permissions?.trustPreset ?? "standard",
       },
     });

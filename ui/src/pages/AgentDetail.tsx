@@ -1,6 +1,8 @@
 import type { AgentInstructionCandidate, AgentInstructionsBundle } from "@paperclipai/shared";
 import { InstructionHistory } from "../components/InstructionHistory";
 import { AgentCharacter } from "../components/AgentCharacter";
+import { JoinApprovalPermissionRow } from "../components/JoinApprovalPermissionRow";
+import { taskAssignSwitch } from "../lib/task-assign-switch";
 import { characterStateForAgent } from "@paperclipai/shared";
 import { mergeRunLogChunks, readChunkSeq } from "../lib/run-log-chunks";
 import { getPageVisibility, usePageVisibility } from "../lib/page-visibility";
@@ -2046,19 +2048,13 @@ export function ConfigurationTab({
 
   const canCreateAgents = Boolean(agent.permissions?.canCreateAgents);
   const canCreateSkills = agent.permissions?.canCreateSkills !== false;
-  const canAssignTasks = Boolean(agent.access?.canAssignTasks);
-  const taskAssignSource = agent.access?.taskAssignSource ?? "none";
-  const taskAssignLocked = agent.role === "ceo" || canCreateAgents;
-  const taskAssignHint =
-    taskAssignSource === "ceo_role"
-      ? "Enabled automatically for CEO agents."
-      : taskAssignSource === "agent_creator"
-        ? "Enabled automatically while this agent can create new agents."
-        : taskAssignSource === "explicit_grant"
-          ? "Enabled via explicit organization permission grant."
-          : taskAssignSource === "simple_default"
-            ? "Enabled by simple organization-wide task assignment defaults."
-            : "Disabled unless explicitly granted.";
+  // Only the task assignment switch sends `canAssignTasks`: the others leave
+  // it out, so a page loaded before a board member's revoke cannot undo it.
+  const {
+    canAssignTasks,
+    locked: taskAssignLocked,
+    hint: taskAssignHint,
+  } = taskAssignSwitch({ role: agent.role, canCreateAgents, access: agent.access });
 
   return (
     <div className="agent-settings-form space-y-6">
@@ -2101,7 +2097,6 @@ export function ConfigurationTab({
           updatePermissions.mutate({
             canCreateAgents,
             canCreateSkills,
-            canAssignTasks,
             ...buildPermissionsForTrustPreset(nextPermissions, nextPermissions.trustPreset === "low_trust_review" ? "low_trust_review" : "standard"),
           })
         }
@@ -2123,7 +2118,6 @@ export function ConfigurationTab({
                 updatePermissions.mutate({
                   canCreateAgents: !canCreateAgents,
                   canCreateSkills,
-                  canAssignTasks: !canCreateAgents ? true : canAssignTasks,
                 })
               }
               disabled={updatePermissions.isPending}
@@ -2142,7 +2136,6 @@ export function ConfigurationTab({
                 updatePermissions.mutate({
                   canCreateAgents,
                   canCreateSkills: !canCreateSkills,
-                  canAssignTasks,
                 })
               }
               disabled={updatePermissions.isPending}
@@ -2167,6 +2160,17 @@ export function ConfigurationTab({
               disabled={updatePermissions.isPending || taskAssignLocked}
             />
           </div>
+          <JoinApprovalPermissionRow
+            grants={agent.access?.grants}
+            disabled={updatePermissions.isPending}
+            onChange={(canApproveJoins) =>
+              updatePermissions.mutate({
+                canCreateAgents,
+                canCreateSkills,
+                canApproveJoins,
+              })
+            }
+          />
         </div>
       </div> : null}
     </div>

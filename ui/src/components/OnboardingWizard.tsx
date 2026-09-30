@@ -131,7 +131,7 @@ import { ModelSourceTiles, type CredentialMode } from "./onboarding/ModelSourceT
 import { CredentialModeLink } from "./onboarding/CredentialModeLink";
 import { FooterNav, type FooterPrimaryIcon } from "./onboarding/FooterNav";
 import { OnboardingHeading } from "./onboarding/OnboardingPrimitives";
-import { DEFAULT_AGENT_ROLE } from "../lib/onboarding-agent-role";
+import { FIRST_AGENT_ROLE } from "../lib/onboarding-agent-role";
 import { capsuleHeroMotion, capsuleRoomEnter, capsuleRoomExit, heroRoomArrival, heroRoomMotion, ledeMotion, stepContentMotion, titleSwapMotion } from "./onboarding/onboarding-motion";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -579,20 +579,12 @@ function OnboardingWizardInner({
   // step's only question, and its CTA gates on it.
   const [agentName, setAgentName] = useState((saved?.agentName as string) ?? "");
   const [agentAppearance, setAgentAppearance] = useState(() => agentAppearanceSchema.safeParse(saved?.agentAppearance).data ?? randomAgentAppearance());
-  // Defaults to `general` rather than empty. The arc stopped asking for a role
-  // — a customer naming their first agent is describing what it does, not
-  // filing it — but the hire still needs one, and the guard below returns
-  // silently when it is missing. An unset role there would mean Connect
-  // appearing to work and hiring nobody.
-  const [agentRole, setAgentRole] = useState<AgentRole>(
-    // `||`, not `??`: the empty string was this field's default before the arc
-    // stopped asking for a role, so every draft saved by an earlier build holds
-    // `agentRole: ""`. `??` passes that straight through, and an empty role
-    // reaches the silent return in the hire — the exact failure the default
-    // exists to prevent, arriving through a restored draft instead of a fresh
-    // one.
-    (saved?.agentRole as AgentRole) || DEFAULT_AGENT_ROLE,
-  );
+  // The arc does not ask for a role — a customer naming their first agent is
+  // describing what it does, not filing it — and the first agent is always the
+  // company's CEO. It is a constant rather than state restored from the draft:
+  // earlier builds saved `agentRole: ""` or `"general"`, and either would file
+  // the first agent as something other than the CEO the company needs.
+  const agentRole: AgentRole = FIRST_AGENT_ROLE;
   const [adapterType, setAdapterType] = useState<AdapterType>(() =>
     restoreOnboardingAdapterType(saved?.adapterType),
   );
@@ -1622,10 +1614,9 @@ function OnboardingWizardInner({
     setError(null);
     setCompanyName("");
     // Back to the mount defaults: an empty name (the step's only question, and
-    // what its CTA gates on) and the neutral role every onboarding hire uses.
+    // what its CTA gates on). The role is always the first agent's CEO role.
     setAgentName("");
     setAgentAppearance(randomAgentAppearance());
-    setAgentRole(DEFAULT_AGENT_ROLE);
     setAdapterType("claude_local");
     setModel("");
     setCommand("");
@@ -2158,10 +2149,7 @@ function OnboardingWizardInner({
         }
       }
 
-      // `agentRole` always holds a value now (see its default), so this is a
-      // type narrowing rather than a gate — but it stays, because a future
-      // path that clears the role must not reach a hire that silently no-ops.
-      if (!agentRole || !isCurrent()) return;
+      if (!isCurrent()) return;
 
       const hireName = agentName.trim() || AGENT_ROLE_LABELS[agentRole];
 
@@ -2624,9 +2612,8 @@ function OnboardingWizardInner({
               {/* Step 3: the name, and only the name. The role picker went with
                   the question it was asking — a customer naming their first
                   agent is describing what it does, and the placeholder carries
-                  the range of answers that fit. Hiring uses the neutral
-                  `general` role; a specific one can be set later, where there
-                  is context to choose it in. */}
+                  the range of answers that fit. The first agent is always hired
+                  as the company's CEO, whatever it is named. */}
               {step === 3 && (
                 <motion.div key="step-3" {...stepContentMotion} exit={stepHandoff ? stepContentMotion.exit : undefined} className="mx-auto flex w-full flex-col gap-9">
                   <div className="flex flex-col gap-2">

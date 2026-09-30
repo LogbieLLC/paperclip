@@ -5,6 +5,7 @@ import { approvalComments, approvals } from "@paperclipai/db";
 import { notFound, unprocessable } from "../errors.js";
 import { redactCurrentUserText } from "../log-redaction.js";
 import { agentService } from "./agents.js";
+import { FIRST_AGENT_ROLE, withFirstAgentDecision } from "./first-agent-ceo.js";
 import { budgetService } from "./budgets.js";
 import { notifyHireApproved } from "./hire-hook.js";
 import { instanceSettingsService } from "./instance-settings.js";
@@ -159,12 +160,14 @@ export function approvalService(db: Db) {
           await reconcileApprovedBuiltInAgent(updated.companyId, payload);
           hireApprovedAgentId = payloadAgentId;
         } else {
-          const created = await agentsSvc.create(updated.companyId, {
+          // The company's first agent is its CEO, whatever the request asked.
+          const requestedRole = String(payload.role ?? "general");
+          const created = await withFirstAgentDecision(db, updated.companyId, (isFirstAgent) => agentsSvc.create(updated.companyId, {
             name: String(payload.name ?? "New Agent"),
             appearance: payload.appearance == null ? undefined : agentAppearanceSchema.parse(payload.appearance),
-            role: String(payload.role ?? "general"),
+            role: isFirstAgent ? FIRST_AGENT_ROLE : requestedRole,
             title: typeof payload.title === "string" ? payload.title : null,
-            reportsTo: typeof payload.reportsTo === "string" ? payload.reportsTo : null,
+            reportsTo: isFirstAgent ? null : typeof payload.reportsTo === "string" ? payload.reportsTo : null,
             capabilities: typeof payload.capabilities === "string" ? payload.capabilities : null,
             adapterType: String(payload.adapterType ?? "process"),
             adapterConfig:
@@ -181,10 +184,14 @@ export function approvalService(db: Db) {
             spentMonthlyCents: 0,
             permissions: undefined,
             lastHeartbeatAt: null,
-          });
+          }));
           hireApprovedAgentId = created?.id ?? null;
         }
         if (hireApprovedAgentId) {
+          // A hire held for board approval (the company's first CEO among
+          // them) gets the company's default agent grants once it is active.
+          const { builtInAgentService } = await import("./built-in-agents.js");
+          await builtInAgentService(db).ensureCompanyDefaultAgentGrants(updated.companyId);
           const budgetMonthlyCents =
             typeof payload.budgetMonthlyCents === "number" ? payload.budgetMonthlyCents : 0;
           if (budgetMonthlyCents > 0) {

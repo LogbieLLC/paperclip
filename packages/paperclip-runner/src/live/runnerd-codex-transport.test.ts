@@ -1,5 +1,6 @@
 import {
   chmod,
+  copyFile,
   cp,
   mkdir,
   lstat,
@@ -7476,6 +7477,13 @@ it("preserves prepared input through runnerd and the real OpenCode proxy boundar
   `], { maxBuffer: 16 * 1024 * 1024 });
   await writeFile(proxy, proxyBytes, { mode: 0o755 });
   const digest = (file: string) => `sha256:${createHash("sha256").update(readFileSync(file)).digest("hex")}`;
+  // The CI image can install Node with group-write permission. Qualify a
+  // private copy so this fixture satisfies the same launch policy as production.
+  // Keep the basename: the verified launcher recognizes "node" to load the
+  // proxy through its CommonJS artifact path.
+  const qualifiedNode = join(root, "node");
+  await copyFile(process.execPath, qualifiedNode);
+  await chmod(qualifiedNode, 0o755);
   const runtime = join(root, "opencode");
   const bundle = createCapabilityRunnerdCodexTransport({
     provider: "opencode",
@@ -7486,8 +7494,8 @@ it("preserves prepared input through runnerd and the real OpenCode proxy boundar
     opencodeCommandSha256: digest(executable),
     opencodeProxyPath: proxy,
     opencodeProxySha256: digest(proxy),
-    providerNodeCommand: process.execPath,
-    providerNodeCommandSha256: digest(process.execPath),
+    providerNodeCommand: qualifiedNode,
+    providerNodeCommandSha256: digest(qualifiedNode),
     environment: { PATH: process.env.PATH, OPENROUTER_API_KEY: "fixture-key" },
   });
   const task = createCodexTaskEnvelope({

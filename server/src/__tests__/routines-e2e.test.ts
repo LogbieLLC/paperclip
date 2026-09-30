@@ -233,6 +233,7 @@ describeEmbeddedPostgres("routine routes end-to-end", () => {
       membership.id,
       [{ permissionKey: "tasks:assign" }],
       userId,
+      { actorType: "user", actorId: userId },
     );
 
     return { companyId, agentId, projectId, userId };
