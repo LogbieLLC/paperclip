@@ -92,7 +92,6 @@ import {
 import { badRequest, conflict, forbidden, HttpError, notFound, unprocessable } from "../errors.js";
 import { ONBOARDING_FIRST_TASK_SKILL_KEY, PAPERCLIP_CORE_SKILL_KEYS } from "../services/company-skills.js";
 import { FIRST_AGENT_ROLE, withFirstAgentDecision } from "../services/first-agent-ceo.js";
-import { isPermissionRevoked } from "../services/permission-revocations.js";
 import { createRunSecretRedactionRegistry } from "../services/run-secret-redaction.js";
 import { assertAuthenticated, assertBoard, assertCompanyAccess, assertInstanceAdmin, buildActorSecretContext, getAccessibleResource, getActorInfo, hasCompanyAccess } from "./authz.js";
 import { runAdapterLoginStartSpine } from "./adapter-login-route-spine.js";
@@ -1603,6 +1602,20 @@ export function agentRoutes(
       ? await access.listPrincipalGrants(agent.companyId, "agent", agent.id)
       : [];
     const hasExplicitTaskAssignGrant = grants.some((grant) => grant.permissionKey === "tasks:assign");
+
+    // A board member turned task assignment off. Show it off, whatever the
+    // role, so the switch can turn it back on and other switches send `false`.
+    if (
+      !hasExplicitTaskAssignGrant &&
+      (await access.isPermissionRevoked(agent.companyId, "agent", agent.id, "tasks:assign"))
+    ) {
+      return {
+        canAssignTasks: false,
+        taskAssignSource: "revoked" as const,
+        membership,
+        grants,
+      };
+    }
 
     if (agent.role === "ceo") {
       return {
@@ -5011,15 +5024,9 @@ export function agentRoutes(
       }
       // A permission a board member turned off stays off until a board
       // member turns it back on. Refuse before changing anything.
-      const taskAssignWillFollowRole = existing.role === "ceo" || req.body.canCreateAgents;
       if (
-        !taskAssignWillFollowRole &&
         req.body.canAssignTasks &&
-        (await isPermissionRevoked(
-          db,
-          { companyId: existing.companyId, principalType: "agent", principalId: existing.id },
-          "tasks:assign",
-        ))
+        (await access.isPermissionRevoked(existing.companyId, "agent", existing.id, "tasks:assign"))
       ) {
         res.status(403).json({ error: "A board member turned off task assignment for this agent. Only a board member can turn it back on." });
         return;
@@ -5036,12 +5043,14 @@ export function agentRoutes(
       return;
     }
 
-    // A CEO or an agent that can create agents assigns tasks by role: the agent
-    // page shows the switch locked on and sends `canAssignTasks: true` with
-    // every change. That grant is automatic and never restores a revoked key.
-    // Only an unlocked switch is a person's decision about task assignment.
+    // A CEO or an agent that can create agents assigns tasks by role. When
+    // `canAssignTasks` is false for such an agent, the grant still follows the
+    // role, as an automatic grant that never restores a revoked key. The
+    // agent page sends false while task assignment is revoked, so other
+    // switches cannot bring it back; `true` is a decision to turn it on.
     const taskAssignFollowsRole = agent.role === "ceo" || Boolean(agent.permissions?.canCreateAgents);
     const effectiveCanAssignTasks = taskAssignFollowsRole || req.body.canAssignTasks;
+    const taskAssignIsDecision = req.body.canAssignTasks || !taskAssignFollowsRole;
     const grantedByUserId = req.actor.type === "board" ? (req.actor.userId ?? null) : null;
     // Recorded as an explicit decision: turning a permission off is durable,
     // and only a person can turn a revoked permission back on.
@@ -5057,7 +5066,7 @@ export function agentRoutes(
       effectiveCanAssignTasks,
       grantedByUserId,
       null,
-      taskAssignFollowsRole ? {} : { decidedBy },
+      taskAssignIsDecision ? { decidedBy } : {},
     );
     if (canApproveJoins !== undefined) {
       await access.setPrincipalPermission(

@@ -87,6 +87,7 @@ import {
   boardAuthService,
   builtInAgentService,
   deduplicateAgentName,
+  heartbeatService,
   logActivity,
   notifyHireApproved
 } from "../services/index.js";
@@ -2653,6 +2654,9 @@ export function accessRoutes(
   const access = accessService(db);
   const boardAuth = boardAuthService(db);
   const agents = agentService(db);
+  // Created on first use: only a rejection that terminates a leftover agent
+  // needs it, to cancel that agent's runs and wakeups.
+  let heartbeat: ReturnType<typeof heartbeatService> | null = null;
   const routeInviteResolutionNetwork = opts.inviteResolutionNetwork
     ? { ...defaultInviteResolutionNetwork, ...opts.inviteResolutionNetwork }
     : inviteResolutionNetwork;
@@ -4501,13 +4505,19 @@ export function accessRoutes(
 
         // An interrupted approval may already have created and recorded the
         // agent (in an empty company, the founding CEO). Rejecting must not
-        // leave that agent active. Done first, under the decision lock, so a
-        // failure here leaves the request pending for another try.
+        // leave that agent active or let work it already started continue,
+        // the same as the terminate route. Done first, under the decision
+        // lock, so a failure here leaves the request pending for another try.
         let terminatedAgentId: string | null = null;
         if (existing.requestType === "agent" && existing.createdAgentId) {
           const leftover = await agents.getById(existing.createdAgentId);
           if (leftover && leftover.companyId === companyId && leftover.status !== "terminated") {
             await agents.terminate(leftover.id);
+            heartbeat ??= heartbeatService(db);
+            await heartbeat.cancelInvocationsForAgents(
+              [leftover.id],
+              "Cancelled because the agent's join request was rejected",
+            );
             terminatedAgentId = leftover.id;
           }
         }

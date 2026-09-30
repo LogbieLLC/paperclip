@@ -20,6 +20,7 @@ import { assertAssignableAgent } from "./agent-assignability.js";
 import { authorizationService, type AuthorizationActor, type AuthorizationResource } from "./authorization.js";
 import { ensureHumanRoleDefaultGrants } from "./principal-access-compatibility.js";
 import {
+  isPermissionRevoked as isRevokedFor,
   lockPrincipalPermissions,
   recordPermissionRevocations,
   resolveGrantableKeys,
@@ -1134,6 +1135,16 @@ export function accessService(db: Db) {
     return granted;
   }
 
+  /** Whether a person or agent explicitly revoked this permission. */
+  async function isPermissionRevoked(
+    companyId: string,
+    principalType: PrincipalType,
+    principalId: string,
+    permissionKey: PermissionKey,
+  ) {
+    return isRevokedFor(db, { companyId, principalType, principalId }, permissionKey);
+  }
+
   async function updateMember(
     companyId: string,
     memberId: string,
@@ -1231,6 +1242,7 @@ export function accessService(db: Db) {
     setUserCompanyAccess,
     setPrincipalGrants,
     listPrincipalGrants,
+    isPermissionRevoked,
     setPrincipalPermission,
     updateMember,
   };

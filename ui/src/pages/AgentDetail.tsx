@@ -2,6 +2,7 @@ import type { AgentInstructionCandidate, AgentInstructionsBundle } from "@paperc
 import { InstructionHistory } from "../components/InstructionHistory";
 import { AgentCharacter } from "../components/AgentCharacter";
 import { JoinApprovalPermissionRow } from "../components/JoinApprovalPermissionRow";
+import { taskAssignSwitch } from "../lib/task-assign-switch";
 import { characterStateForAgent } from "@paperclipai/shared";
 import { mergeRunLogChunks, readChunkSeq } from "../lib/run-log-chunks";
 import { getPageVisibility, usePageVisibility } from "../lib/page-visibility";
@@ -2047,19 +2048,12 @@ export function ConfigurationTab({
 
   const canCreateAgents = Boolean(agent.permissions?.canCreateAgents);
   const canCreateSkills = agent.permissions?.canCreateSkills !== false;
-  const canAssignTasks = Boolean(agent.access?.canAssignTasks);
-  const taskAssignSource = agent.access?.taskAssignSource ?? "none";
-  const taskAssignLocked = agent.role === "ceo" || canCreateAgents;
-  const taskAssignHint =
-    taskAssignSource === "ceo_role"
-      ? "Enabled automatically for CEO agents."
-      : taskAssignSource === "agent_creator"
-        ? "Enabled automatically while this agent can create new agents."
-        : taskAssignSource === "explicit_grant"
-          ? "Enabled via explicit organization permission grant."
-          : taskAssignSource === "simple_default"
-            ? "Enabled by simple organization-wide task assignment defaults."
-            : "Disabled unless explicitly granted.";
+  const {
+    canAssignTasks,
+    locked: taskAssignLocked,
+    hint: taskAssignHint,
+    valueWhenEnablingAgentCreation,
+  } = taskAssignSwitch({ role: agent.role, canCreateAgents, access: agent.access });
 
   return (
     <div className="agent-settings-form space-y-6">
@@ -2124,7 +2118,7 @@ export function ConfigurationTab({
                 updatePermissions.mutate({
                   canCreateAgents: !canCreateAgents,
                   canCreateSkills,
-                  canAssignTasks: !canCreateAgents ? true : canAssignTasks,
+                  canAssignTasks: !canCreateAgents ? valueWhenEnablingAgentCreation : canAssignTasks,
                 })
               }
               disabled={updatePermissions.isPending}

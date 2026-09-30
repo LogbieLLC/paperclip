@@ -396,14 +396,38 @@ describeEmbeddedPostgres("a revoked permission stays revoked", () => {
       decidedBy: { actorType: "user", actorId: BOARD_USER_ID },
     });
 
-    // The agent page shows task assignment locked on for a CEO, so it sends
-    // canAssignTasks: true with every switch, here "Can create/import skills".
-    const res = await request(await createApp(db, boardActor(company.id)))
+    const app = await createApp(db, boardActor(company.id));
+
+    // The agent page shows the revoke, so the switch is off and unlocked...
+    const shown = await request(app).get(`/api/agents/${ceo.id}`);
+    expect(shown.status, JSON.stringify(shown.body)).toBe(200);
+    expect(shown.body.access).toMatchObject({ canAssignTasks: false, taskAssignSource: "revoked" });
+
+    // ...and every other switch sends that state, here "Can create/import skills".
+    const res = await request(app)
       .patch(`/api/agents/${ceo.id}/permissions`)
-      .send({ canCreateAgents: true, canCreateSkills: false, canAssignTasks: true });
+      .send({ canCreateAgents: true, canCreateSkills: false, canAssignTasks: false });
 
     expect(res.status, JSON.stringify(res.body)).toBe(200);
     expect(await grantKeys(company.id, "agent", ceo.id)).not.toContain("tasks:assign");
+    expect(res.body.access).toMatchObject({ canAssignTasks: false, taskAssignSource: "revoked" });
+  }, 60_000);
+
+  it("lets a board member turn a CEO's revoked task assignment back on from the agent page", async () => {
+    const { access } = await services();
+    const company = await seedCompany();
+    const ceo = await seedRootCeo(company.id);
+    await access.setPrincipalPermission(company.id, "agent", ceo.id, "tasks:assign", false, BOARD_USER_ID, null, {
+      decidedBy: { actorType: "user", actorId: BOARD_USER_ID },
+    });
+
+    const res = await request(await createApp(db, boardActor(company.id)))
+      .patch(`/api/agents/${ceo.id}/permissions`)
+      .send({ canCreateAgents: true, canAssignTasks: true });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(await grantKeys(company.id, "agent", ceo.id)).toContain("tasks:assign");
+    expect(res.body.access).toMatchObject({ canAssignTasks: true, taskAssignSource: "ceo_role" });
   }, 60_000);
 
   it("keeps an agent's task assignment revoked when the board turns it off on the agent page", async () => {

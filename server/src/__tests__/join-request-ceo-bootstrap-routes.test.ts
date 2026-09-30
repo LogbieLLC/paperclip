@@ -10,6 +10,8 @@ import {
   companies,
   companyMemberships,
   createDb,
+  heartbeatRunEvents,
+  heartbeatRuns,
   invites,
   joinRequests,
   principalPermissionGrants,
@@ -166,6 +168,8 @@ describeEmbeddedPostgres("join request approval bootstraps and empowers the comp
 
   afterEach(async () => {
     await db.delete(activityLog);
+    await db.delete(heartbeatRunEvents);
+    await db.delete(heartbeatRuns);
     await db.delete(agentApiKeys);
     await db.delete(joinRequests);
     await db.delete(invites);
@@ -441,6 +445,11 @@ describeEmbeddedPostgres("join request approval bootstraps and empowers the comp
       .values({ companyId: company.id, name: "OpenClaw", role: "ceo", status: "idle", adapterType: "openclaw_gateway" })
       .returning();
     await db.update(joinRequests).set({ createdAgentId: founder!.id }).where(eq(joinRequests.id, joinRequest.id));
+    // Work the leftover agent already had queued.
+    const [queuedRun] = await db
+      .insert(heartbeatRuns)
+      .values({ companyId: company.id, agentId: founder!.id, status: "queued" })
+      .returning();
 
     const res = await request(await createApp(db, boardActor(company.id)))
       .post(`/api/companies/${company.id}/join-requests/${joinRequest.id}/reject`)
@@ -450,6 +459,8 @@ describeEmbeddedPostgres("join request approval bootstraps and empowers the comp
     expect(res.body.status).toBe("rejected");
     const [left] = await db.select().from(agents).where(eq(agents.id, founder!.id));
     expect(left!.status).toBe("terminated");
+    const [run] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, queuedRun!.id));
+    expect(run!.status).toBe("cancelled");
   }, 30_000);
   it("makes a CEO-approved agent's key accountable to the person the CEO's run token acts for", async () => {
     const company = await seedCompany(db);

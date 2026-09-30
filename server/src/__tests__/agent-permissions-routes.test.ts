@@ -66,6 +66,7 @@ const mockAccessService = vi.hoisted(() => ({
   getMembership: vi.fn(),
   ensureMembership: vi.fn(),
   listPrincipalGrants: vi.fn(),
+  isPermissionRevoked: vi.fn(),
   setPrincipalPermission: vi.fn(),
 }));
 
@@ -313,6 +314,8 @@ describe.sequential("agent permission routes", () => {
     mockAccessService.getMembership.mockReset();
     mockAccessService.ensureMembership.mockReset();
     mockAccessService.listPrincipalGrants.mockReset();
+    mockAccessService.isPermissionRevoked.mockReset();
+    mockAccessService.isPermissionRevoked.mockResolvedValue(false);
     mockAccessService.setPrincipalPermission.mockReset();
     mockApprovalService.create.mockReset();
     mockApprovalService.getById.mockReset();
