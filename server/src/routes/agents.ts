@@ -91,7 +91,7 @@ import {
 } from "../services/index.js";
 import { badRequest, conflict, forbidden, HttpError, notFound, unprocessable } from "../errors.js";
 import { ONBOARDING_FIRST_TASK_SKILL_KEY, PAPERCLIP_CORE_SKILL_KEYS } from "../services/company-skills.js";
-import { companyAwaitsFirstAgent, FIRST_AGENT_ROLE, withFirstAgentDecision } from "../services/first-agent-ceo.js";
+import { FIRST_AGENT_ROLE, withFirstAgentDecision } from "../services/first-agent-ceo.js";
 import { createRunSecretRedactionRegistry } from "../services/run-secret-redaction.js";
 import { assertAuthenticated, assertBoard, assertCompanyAccess, assertInstanceAdmin, buildActorSecretContext, getAccessibleResource, getActorInfo, hasCompanyAccess } from "./authz.js";
 import { runAdapterLoginStartSpine } from "./adapter-login-route-spine.js";
@@ -4500,13 +4500,6 @@ export function agentRoutes(
     // The company's first agent is its CEO whatever it is named or the client
     // asked for. Resolved before the role-driven skill defaults below so the
     // CEO also receives the core CEO skills.
-    const hireRequestedRole = hireInput.role;
-    const hireRequestedReportsTo = hireInput.reportsTo ?? null;
-    const hireIsFirstAgent = await companyAwaitsFirstAgent(db, companyId);
-    if (hireIsFirstAgent) {
-      hireInput.role = FIRST_AGENT_ROLE;
-      hireInput.reportsTo = null;
-    }
     hireInput.adapterType = await assertSelectableAdapterType(hireInput.adapterType);
     const rawHireAdapterConfig = (hireInput.adapterConfig ?? {}) as Record<string, unknown>;
     assertProviderTraceSettingTransition(req, hireInput.runtimeConfig);
@@ -4543,25 +4536,32 @@ export function agentRoutes(
       name: hireInput.name,
       adapterConfig: requestedAdapterConfig,
     });
-    const desiredSkillAssignment = await resolveDesiredSkillAssignment(
-      companyId,
-      hireInput.adapterType,
-      requestedAdapterConfig,
-      withDefaultRoleSkillSelections(
-        normalizeDesiredSkillSelections(Array.isArray(requestedDesiredSkills) ? requestedDesiredSkills : undefined),
-        defaultRoleSkillSelections(
-          hireInput.role,
-          hireInput.adapterType,
-          hireOnboardingFirstAgent === true && req.actor.type === "board",
+    // Role-driven skill defaults. Re-run for the CEO role only when the
+    // first-agent decision below files this hire as the company's CEO.
+    const resolveHireSkills = async (role: string) => {
+      const assignment = await resolveDesiredSkillAssignment(
+        companyId,
+        hireInput.adapterType,
+        requestedAdapterConfig,
+        withDefaultRoleSkillSelections(
+          normalizeDesiredSkillSelections(Array.isArray(requestedDesiredSkills) ? requestedDesiredSkills : undefined),
+          defaultRoleSkillSelections(
+            role,
+            hireInput.adapterType,
+            hireOnboardingFirstAgent === true && req.actor.type === "board",
+          ),
         ),
-      ),
-      "add",
-    );
-    const normalizedAdapterConfig = await normalizeMediatedAdapterConfigForPersistence({
-      companyId,
-      adapterType: hireInput.adapterType,
-      adapterConfig: desiredSkillAssignment.adapterConfig,
-    });
+        "add",
+      );
+      const adapterConfig = await normalizeMediatedAdapterConfigForPersistence({
+        companyId,
+        adapterType: hireInput.adapterType,
+        adapterConfig: assignment.adapterConfig,
+      });
+      return { assignment, adapterConfig };
+    };
+    let { assignment: desiredSkillAssignment, adapterConfig: normalizedAdapterConfig } =
+      await resolveHireSkills(hireInput.role);
     const normalizedRuntimeConfig = await normalizeCreatedAgentRuntimeConfig(req, companyId, hireInput.adapterType, normalizedAdapterConfig, hireInput.runtimeConfig);
     const normalizedHireInput = {
       ...hireInput,
@@ -4623,16 +4623,17 @@ export function agentRoutes(
       const status = requiresApproval ? "pending_approval" : "idle";
       const managedHireBinding = normalizedHireInput.runtimeConfig?.aiConnection ? aiConnectionBindingSchema.parse(normalizedHireInput.runtimeConfig.aiConnection) : undefined;
       const managedHireConnectionId = managedHireBinding ? await validateManagedAgentBinding(req, companyId, hiredAgentId, normalizedHireInput.adapterType, normalizedHireInput.adapterConfig, managedHireBinding, normalizedHireInput.defaultEnvironmentId, false, true) : undefined;
-      // The first-agent decision is re-read, and the agent inserted, under a
-      // company lock, so overlapping first hires cannot both become CEO. It
-      // runs before the approval records the role it will replay.
+      // The company's first agent is its CEO whatever it is named or the
+      // client asked for. The decision is made, and the agent inserted, under
+      // a company lock, so overlapping first hires cannot both become CEO and
+      // only the CEO receives the CEO skills. It runs before the approval
+      // records the role it will replay.
       const createdAgent = await withFirstAgentDecision(db, companyId, async (isFirstAgent) => {
         if (isFirstAgent) {
           normalizedHireInput.role = FIRST_AGENT_ROLE;
           normalizedHireInput.reportsTo = null;
-        } else if (hireIsFirstAgent) {
-          normalizedHireInput.role = hireRequestedRole;
-          normalizedHireInput.reportsTo = hireRequestedReportsTo;
+          ({ assignment: desiredSkillAssignment, adapterConfig: normalizedHireInput.adapterConfig } =
+            await resolveHireSkills(FIRST_AGENT_ROLE));
         }
         return svc.create(
           companyId,
@@ -4834,13 +4835,6 @@ export function agentRoutes(
     } = req.body;
     // The company's first agent is its CEO whatever it is named or the client
     // asked for (see the hire route).
-    const createRequestedRole = createInput.role;
-    const createRequestedReportsTo = createInput.reportsTo ?? null;
-    const createIsFirstAgent = await companyAwaitsFirstAgent(db, companyId);
-    if (createIsFirstAgent) {
-      createInput.role = FIRST_AGENT_ROLE;
-      createInput.reportsTo = null;
-    }
     createInput.adapterType = await assertSelectableAdapterType(createInput.adapterType);
     const rawCreateAdapterConfig = (createInput.adapterConfig ?? {}) as Record<string, unknown>;
     assertProviderTraceSettingTransition(req, createInput.runtimeConfig);
@@ -4870,25 +4864,32 @@ export function agentRoutes(
       name: createInput.name,
       adapterConfig: requestedAdapterConfig,
     });
-    const desiredSkillAssignment = await resolveDesiredSkillAssignment(
-      companyId,
-      createInput.adapterType,
-      requestedAdapterConfig,
-      withDefaultRoleSkillSelections(
-        normalizeDesiredSkillSelections(Array.isArray(requestedDesiredSkills) ? requestedDesiredSkills : undefined),
-        defaultRoleSkillSelections(
-          createInput.role,
-          createInput.adapterType,
-          createOnboardingFirstAgent === true && req.actor.type === "board",
+    // See the hire route: re-run for the CEO role only if this agent becomes
+    // the company's first agent.
+    const resolveCreateSkills = async (role: string) => {
+      const assignment = await resolveDesiredSkillAssignment(
+        companyId,
+        createInput.adapterType,
+        requestedAdapterConfig,
+        withDefaultRoleSkillSelections(
+          normalizeDesiredSkillSelections(Array.isArray(requestedDesiredSkills) ? requestedDesiredSkills : undefined),
+          defaultRoleSkillSelections(
+            role,
+            createInput.adapterType,
+            createOnboardingFirstAgent === true && req.actor.type === "board",
+          ),
         ),
-      ),
-      "add",
-    );
-    const normalizedAdapterConfig = await normalizeMediatedAdapterConfigForPersistence({
-      companyId,
-      adapterType: createInput.adapterType,
-      adapterConfig: desiredSkillAssignment.adapterConfig,
-    });
+        "add",
+      );
+      const adapterConfig = await normalizeMediatedAdapterConfigForPersistence({
+        companyId,
+        adapterType: createInput.adapterType,
+        adapterConfig: assignment.adapterConfig,
+      });
+      return { assignment, adapterConfig };
+    };
+    let { assignment: desiredSkillAssignment, adapterConfig: normalizedAdapterConfig } =
+      await resolveCreateSkills(createInput.role);
     const normalizedRuntimeConfig = await normalizeCreatedAgentRuntimeConfig(req, companyId, createInput.adapterType, normalizedAdapterConfig, createInput.runtimeConfig);
     await assertAgentEnvironmentSelection(companyId, createInput.adapterType, createInput.defaultEnvironmentId);
     await assertAgentDefaultEnvironmentSelection(companyId, createInput.defaultEnvironmentId, {
@@ -4903,9 +4904,8 @@ export function agentRoutes(
       if (isFirstAgent) {
         createInput.role = FIRST_AGENT_ROLE;
         createInput.reportsTo = null;
-      } else if (createIsFirstAgent) {
-        createInput.role = createRequestedRole;
-        createInput.reportsTo = createRequestedReportsTo;
+        ({ assignment: desiredSkillAssignment, adapterConfig: normalizedAdapterConfig } =
+          await resolveCreateSkills(FIRST_AGENT_ROLE));
       }
       return svc.create(
         companyId,

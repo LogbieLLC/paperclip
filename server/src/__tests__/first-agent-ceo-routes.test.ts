@@ -10,9 +10,11 @@ import {
   approvals,
   companies,
   companyMemberships,
+  companySkills,
   createDb,
   principalPermissionGrants,
 } from "@paperclipai/db";
+import { readPaperclipSkillSyncPreference } from "@paperclipai/adapter-utils/server-utils";
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
 import { errorHandler } from "../middleware/index.js";
 import { agentRoutes } from "../routes/agents.js";
@@ -133,6 +135,8 @@ describeEmbeddedPostgres("first agent in a company becomes the CEO", () => {
     await db.delete(companyMemberships);
     await db.delete(agentRuntimeState);
     await db.delete(agents);
+    // A first hire on a skills-capable adapter installs the core CEO skills.
+    await db.delete(companySkills);
     await db.delete(companies);
   });
 
@@ -294,6 +298,29 @@ describeEmbeddedPostgres("first agent in a company becomes the CEO", () => {
     expect(ceos[0]!.reportsTo).toBeNull();
     for (const row of rows.filter((entry) => entry.id !== ceos[0]!.id)) {
       expect(row.role).toBe("engineer");
+    }
+  }, 60_000);
+  it("gives CEO skills only to the agent that becomes CEO when first hires overlap", async () => {
+    const company = await seedCompany(db);
+    const app = createApp(db, boardActor(company.id));
+    // A skill that only the CEO role adds by default.
+    const ceoOnlySkill = "paperclipai/paperclip/paperclip-board";
+
+    const results = await Promise.all(
+      ["A", "B", "C"].map((name) =>
+        request(app)
+          .post(`/api/companies/${company.id}/agent-hires`)
+          .send({ name: `Skilled ${name}`, role: "engineer", adapterType: "claude_local", adapterConfig: {} }),
+      ),
+    );
+    for (const res of results) expect(res.status, JSON.stringify(res.body)).toBe(201);
+
+    const rows = await db.select().from(agents).where(eq(agents.companyId, company.id));
+    expect(rows.filter((row) => row.role === "ceo")).toHaveLength(1);
+    for (const row of rows) {
+      const skills = readPaperclipSkillSyncPreference(row.adapterConfig as Record<string, unknown>).desiredSkills;
+      if (row.role === "ceo") expect(skills).toContain(ceoOnlySkill);
+      else expect(skills, row.name).not.toContain(ceoOnlySkill);
     }
   }, 60_000);
 });
