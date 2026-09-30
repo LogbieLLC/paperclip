@@ -565,15 +565,15 @@ describe("OnboardingWizard restore-gate (stale localStorage across accounts)", (
       await act(async () => root.unmount());
     });
 
-    it("hires from a legacy draft that saved an empty role", async () => {
+    it.each(["", "general"])("hires the first agent as CEO from a draft that saved role %j", async (savedRole) => {
       // `agentRole: ""` was this field's default before the arc stopped asking
-      // for a role, so every draft saved by an earlier build carries it. `??`
-      // would pass the empty string straight through to the hire's silent
-      // return — the same no-op the default exists to prevent, arriving
-      // through a restored draft instead of a fresh one.
+      // for a role, and `general` is what later builds saved. Neither may
+      // reach the hire: an empty role would hit its silent return, and a
+      // `general` first agent leaves the company without a CEO, so agent join
+      // requests can never be approved (paperclipai/paperclip#11440).
       window.localStorage.setItem(
         ONBOARDING_STORAGE_KEY,
-        JSON.stringify({ step: 1, companyName: "Initech", agentRole: "" }),
+        JSON.stringify({ step: 1, companyName: "Initech", agentRole: savedRole }),
       );
       mockDialog.onboardingOptions = {};
       mockCompany.companies = [];
@@ -622,7 +622,7 @@ describe("OnboardingWizard restore-gate (stale localStorage across accounts)", (
       // The mock is declared with no parameters, so index the call rather than
       // destructuring a zero-length tuple type.
       const hireArgs = mockAgentsApi.hire.mock.calls.at(-1) as unknown[];
-      expect((hireArgs[1] as { role: string }).role).toBe("general");
+      expect((hireArgs[1] as { role: string }).role).toBe("ceo");
 
       await act(async () => root.unmount());
     });

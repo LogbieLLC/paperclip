@@ -185,6 +185,10 @@ export function approvalService(db: Db) {
           hireApprovedAgentId = created?.id ?? null;
         }
         if (hireApprovedAgentId) {
+          // A hire held for board approval (the company's first CEO among
+          // them) gets the company's default agent grants once it is active.
+          const { builtInAgentService } = await import("./built-in-agents.js");
+          await builtInAgentService(db).ensureCompanyDefaultAgentGrants(updated.companyId);
           const budgetMonthlyCents =
             typeof payload.budgetMonthlyCents === "number" ? payload.budgetMonthlyCents : 0;
           if (budgetMonthlyCents > 0) {

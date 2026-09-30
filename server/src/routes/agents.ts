@@ -91,6 +91,7 @@ import {
 } from "../services/index.js";
 import { badRequest, conflict, forbidden, HttpError, notFound, unprocessable } from "../errors.js";
 import { ONBOARDING_FIRST_TASK_SKILL_KEY, PAPERCLIP_CORE_SKILL_KEYS } from "../services/company-skills.js";
+import { companyAwaitsFirstAgent, FIRST_AGENT_ROLE } from "../services/first-agent-ceo.js";
 import { createRunSecretRedactionRegistry } from "../services/run-secret-redaction.js";
 import { assertAuthenticated, assertBoard, assertCompanyAccess, assertInstanceAdmin, buildActorSecretContext, getAccessibleResource, getActorInfo, hasCompanyAccess } from "./authz.js";
 import { runAdapterLoginStartSpine } from "./adapter-login-route-spine.js";
@@ -4496,6 +4497,13 @@ export function agentRoutes(
       hireInput.adapterConfig = inheritNativeRunnerAdapterConfig(caller.adapterConfig);
       hireInput.defaultEnvironmentId = caller.defaultEnvironmentId ?? null;
     }
+    // The company's first agent is its CEO whatever it is named or the client
+    // asked for. Resolved before the role-driven skill defaults below so the
+    // CEO also receives the core CEO skills.
+    if (await companyAwaitsFirstAgent(db, companyId)) {
+      hireInput.role = FIRST_AGENT_ROLE;
+      hireInput.reportsTo = null;
+    }
     hireInput.adapterType = await assertSelectableAdapterType(hireInput.adapterType);
     const rawHireAdapterConfig = (hireInput.adapterConfig ?? {}) as Record<string, unknown>;
     assertProviderTraceSettingTransition(req, hireInput.runtimeConfig);
@@ -4745,6 +4753,11 @@ export function agentRoutes(
         agent.id,
         actor.actorType === "user" ? actor.actorId : null,
       );
+      // A hire can be the company's root CEO (the onboarding wizard hires its
+      // first agent here), so apply the root-CEO defaults the create route
+      // applies. A hire still pending board approval receives them when the
+      // approval is granted.
+      await builtInAgentService(db).ensureCompanyDefaultAgentGrants(companyId);
 
       if (approval) {
         await logActivity(db, {
@@ -4804,6 +4817,12 @@ export function agentRoutes(
       onboardingFirstAgent: createOnboardingFirstAgent,
       ...createInput
     } = req.body;
+    // The company's first agent is its CEO whatever it is named or the client
+    // asked for (see the hire route).
+    if (await companyAwaitsFirstAgent(db, companyId)) {
+      createInput.role = FIRST_AGENT_ROLE;
+      createInput.reportsTo = null;
+    }
     createInput.adapterType = await assertSelectableAdapterType(createInput.adapterType);
     const rawCreateAdapterConfig = (createInput.adapterConfig ?? {}) as Record<string, unknown>;
     assertProviderTraceSettingTransition(req, createInput.runtimeConfig);

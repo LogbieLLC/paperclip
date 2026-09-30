@@ -539,7 +539,7 @@ describe("OnboardingWizard — which step it lands on", () => {
 
     /**
      * Name the agent. The role picker is gone — the arc asks for a name and
-     * hires with the neutral `general` role — so advancing from step 3 means
+     * hires the first agent as the company's CEO — so advancing from step 3 means
      * putting something in the one field it has.
      */
     async function nameAgent(name = "Ada") {

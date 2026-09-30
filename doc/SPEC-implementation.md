@@ -1357,6 +1357,8 @@ issue.
 
 Board can bypass request flow and create agents directly via UI; direct create is still logged as a governance action.
 
+The first agent a company gets is always its CEO (`role=ceo`, `reportsTo=null`), whatever it is named and whatever role the request carried. This holds for the onboarding wizard, direct create, hire requests, and agent join requests. Terminated agents and bundled built-in agents do not count as a first agent. The root CEO receives `agents:configure`, `skills:create`, and `joins:approve` grants on every path that activates it, so it can approve or reject further agent join requests on the board's behalf. Human join requests and `approvals` rows (hires, CEO strategy, budget overrides, board approval requests) remain board decisions.
+
 ## 12.2 CEO Strategy Approval
 
 1. CEO posts strategy proposal as `approval(type=approve_ceo_strategy)`.

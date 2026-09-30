@@ -84,10 +84,12 @@ import {
   accessService,
   agentService,
   boardAuthService,
+  builtInAgentService,
   deduplicateAgentName,
   logActivity,
   notifyHireApproved
 } from "../services/index.js";
+import { FIRST_AGENT_ROLE, isFirstCompanyAgent } from "../services/first-agent-ceo.js";
 import {
   grantsForHumanRole,
   normalizeHumanRole,
@@ -98,7 +100,7 @@ import {
   collapseDuplicatePendingHumanJoinRequests,
   findReusableHumanJoinRequest,
 } from "../lib/join-request-dedupe.js";
-import { assertAuthenticated, assertCompanyAccess } from "./authz.js";
+import { assertAuthenticated, assertCompanyAccess, getActorInfo } from "./authz.js";
 import {
   claimBoardOwnership,
   inspectBoardClaimChallenge
@@ -3044,6 +3046,28 @@ export function accessRoutes(
     if (!allowed) throw forbidden("Permission denied");
   }
 
+  // An agent holding joins:approve (the root CEO by default) decides AGENT join
+  // requests on the board's behalf. A human join request grants company
+  // membership and board access, so only a human may decide it.
+  function assertJoinRequestDecisionActor(req: Request, requestType: string) {
+    if (req.actor.type === "agent" && requestType !== "agent") {
+      throw forbidden("Only a board member can decide a human join request");
+    }
+  }
+
+  function joinDecisionUserId(req: Request) {
+    if (req.actor.type === "agent") return null;
+    return req.actor.userId ?? (isLocalImplicit(req) ? "local-board" : null);
+  }
+
+  function joinDecisionActivityActor(req: Request) {
+    if (req.actor.type === "agent") {
+      const { actorType, actorId, agentId, runId, agentApiKeyId } = getActorInfo(req);
+      return { actorType, actorId, agentId, runId, agentApiKeyId };
+    }
+    return { actorType: "user" as const, actorId: req.actor.userId ?? "board" };
+  }
+
   async function assertCanGenerateOpenClawInvitePrompt(
     req: Request,
     companyId: string
@@ -4188,6 +4212,9 @@ export function accessRoutes(
     const query = listJoinRequestsQuerySchema.parse(req.query);
     const all = await loadJoinRequestRecords(db, companyId);
     const filtered = all.filter((row) => {
+      // Agents act only on agent join requests, so they never see a human
+      // requester's identity or email.
+      if (req.actor.type === "agent" && row.requestType !== "agent") return false;
       if (query.status && row.status !== query.status) return false;
       if (query.requestType && row.requestType !== query.requestType)
         return false;
@@ -4214,6 +4241,7 @@ export function accessRoutes(
         )
         .then((rows) => rows[0] ?? null);
       if (!existing) throw notFound("Join request not found");
+      assertJoinRequestDecisionActor(req, existing.requestType);
       if (existing.status !== "pending_approval")
         throw conflict("Join request is not pending");
 
@@ -4252,10 +4280,16 @@ export function accessRoutes(
       } else {
         assertLegacyAgentInviteAdapterType(existing.adapterType);
         const existingAgents = await agents.list(companyId);
-        const managerId = resolveJoinRequestAgentManagerId(existingAgents);
-        if (!managerId) {
+        // The first agent to join an empty company becomes its CEO, so an
+        // external runtime (e.g. OpenClaw) can found a new company instead of
+        // waiting on a CEO that nothing would ever create.
+        const joinsAsFirstAgent = isFirstCompanyAgent(existingAgents);
+        const managerId = joinsAsFirstAgent
+          ? null
+          : resolveJoinRequestAgentManagerId(existingAgents);
+        if (!joinsAsFirstAgent && !managerId) {
           throw conflict(
-            "Join request cannot be approved because this company has no active CEO"
+            "Join request cannot be approved because this company has no active CEO. Promote an existing agent to the CEO role, then approve this request again."
           );
         }
 
@@ -4270,7 +4304,7 @@ export function accessRoutes(
 
         const created = await agents.create(companyId, {
           name: agentName,
-          role: "general",
+          role: joinsAsFirstAgent ? FIRST_AGENT_ROLE : "general",
           title: null,
           status: "idle",
           reportsTo: managerId,
@@ -4304,16 +4338,18 @@ export function accessRoutes(
           "agent",
           created.id,
           grants,
-          req.actor.userId ?? null
+          req.actor.type === "agent" ? null : (req.actor.userId ?? null)
         );
+        // After the replace above, so a CEO created by this join keeps the
+        // root-CEO grants (including joins:approve) on top of the invite's.
+        await builtInAgentService(db).ensureCompanyDefaultAgentGrants(companyId);
       }
 
       const approved = await db
         .update(joinRequests)
         .set({
           status: "approved",
-          approvedByUserId:
-            req.actor.userId ?? (isLocalImplicit(req) ? "local-board" : null),
+          approvedByUserId: joinDecisionUserId(req),
           approvedAt: new Date(),
           createdAgentId,
           updatedAt: new Date()
@@ -4324,8 +4360,7 @@ export function accessRoutes(
 
       await logActivity(db, {
         companyId,
-        actorType: "user",
-        actorId: req.actor.userId ?? "board",
+        ...joinDecisionActivityActor(req),
         action: "join.approved",
         entityType: "join_request",
         entityId: requestId,
@@ -4364,6 +4399,7 @@ export function accessRoutes(
         )
         .then((rows) => rows[0] ?? null);
       if (!existing) throw notFound("Join request not found");
+      assertJoinRequestDecisionActor(req, existing.requestType);
       if (existing.status !== "pending_approval")
         throw conflict("Join request is not pending");
 
@@ -4371,8 +4407,7 @@ export function accessRoutes(
         .update(joinRequests)
         .set({
           status: "rejected",
-          rejectedByUserId:
-            req.actor.userId ?? (isLocalImplicit(req) ? "local-board" : null),
+          rejectedByUserId: joinDecisionUserId(req),
           rejectedAt: new Date(),
           updatedAt: new Date()
         })
@@ -4382,8 +4417,7 @@ export function accessRoutes(
 
       await logActivity(db, {
         companyId,
-        actorType: "user",
-        actorId: req.actor.userId ?? "board",
+        ...joinDecisionActivityActor(req),
         action: "join.rejected",
         entityType: "join_request",
         entityId: requestId,

@@ -10,11 +10,13 @@ import { AGENT_ROLE_LABELS, type AgentRole } from "@paperclipai/shared";
  *
  * The arc asks for a name, not a role: someone naming their first agent is
  * describing what it should do, and the placeholder carries the range of
- * answers that fit. `general` is the honest filing for that — it claims
- * nothing the customer did not say — and the role can be set later, in the
- * app, where the agent's work gives the choice meaning.
+ * answers that fit. Whatever the name, the first agent leads the company, so
+ * it is filed as its CEO: the org chart needs a root, and agent join requests
+ * can only be approved once a CEO exists for new agents to report to
+ * (paperclipai/paperclip#11440). The server enforces the same rule; this keeps
+ * the wizard's request honest about it.
  */
-export const DEFAULT_AGENT_ROLE = "general" as const;
+export const FIRST_AGENT_ROLE = "ceo" as const;
 
 export const DEFAULT_AGENT_NAME = "Chief of staff";
 

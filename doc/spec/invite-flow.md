@@ -60,8 +60,8 @@ flowchart TD
 
   Active --> AgentPending: agent accept
   AgentPending --> Accepted
-  AgentPending --> AgentApproved: board approves
-  AgentPending --> AgentRejected: board rejects
+  AgentPending --> AgentApproved: board or CEO approves
+  AgentPending --> AgentRejected: board or CEO rejects
   AgentApproved --> ClaimAvailable: createdAgentId + claimSecretHash
   ClaimAvailable --> ClaimConsumed: POST claim-api-key succeeds
   ClaimAvailable --> ClaimExpired: secret expires
@@ -295,3 +295,5 @@ sequenceDiagram
 - `GET /api/invites/:token/logo` still rejects accepted invites, so accepted-invite reload states may fall back to the generated company icon even though the summary payload still carries `companyLogoUrl`.
 - Accepted-invite replay is supported for matching human invitees to repair/complete membership, and for `agent` requests with `adapterType=openclaw_gateway` when the existing join request is still `pending_approval` or already `approved`.
 - `bootstrap_ceo` invites are one-time and do not create join requests.
+- The first agent to join a company that has no other active, non-built-in agent becomes the company CEO (`role=ceo`, `reportsTo=null`) and receives the root-CEO grants, so an external runtime such as OpenClaw can found a new company. Later agent joins are filed as `general` and report to the root CEO. If agents exist but none is a CEO, approval returns `409` and asks the board to promote an agent to CEO first.
+- Any principal holding `joins:approve` may list, approve, and reject join requests. The root CEO holds it by default. Agent principals only see and decide `agent` join requests: a `human` join request grants company membership, so agents get `403` on it and never see human requester details. Decisions made by an agent are logged with the agent as the actor.
