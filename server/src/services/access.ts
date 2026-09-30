@@ -493,7 +493,8 @@ export function accessService(db: Db) {
     memberId: string,
     requestedGrants: GrantInput[],
     grantedByUserId: string | null,
-    decidedBy: PermissionDecisionActor = { actorType: "user", actorId: grantedByUserId ?? "board" },
+    // Required: who decided. A person clears revocations; an agent never does.
+    decidedBy: PermissionDecisionActor,
   ) {
     const member = await getMemberById(companyId, memberId);
     if (!member) return null;
@@ -542,7 +543,8 @@ export function accessService(db: Db) {
       grants: GrantInput[];
     },
     grantedByUserId: string | null,
-    decidedBy: PermissionDecisionActor = { actorType: "user", actorId: grantedByUserId ?? "board" },
+    // Required: who decided. A person clears revocations; an agent never does.
+    decidedBy: PermissionDecisionActor,
   ) {
     return db.transaction(async (tx) => {
       await tx.execute(sql`
@@ -1073,7 +1075,9 @@ export function accessService(db: Db) {
        */
       decidedBy?: PermissionDecisionActor;
     } = {},
-  ) {
+  ): Promise<boolean> {
+    // Returns whether the principal ends up in the requested state. False
+    // means a grant was refused because the key is revoked.
     const principal = { companyId, principalType, principalId };
     const principalGrantConditions = and(
       eq(principalPermissionGrants.companyId, companyId),
@@ -1092,7 +1096,7 @@ export function accessService(db: Db) {
           await recordPermissionRevocations(txDb, principal, [permissionKey], options.decidedBy);
         }
       });
-      return;
+      return true;
     }
 
     const granted = await db.transaction(async (tx) => {
@@ -1127,6 +1131,7 @@ export function accessService(db: Db) {
     if (granted) {
       await ensureMembership(companyId, principalType, principalId, "member", "active");
     }
+    return granted;
   }
 
   async function updateMember(

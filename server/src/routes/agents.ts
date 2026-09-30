@@ -92,6 +92,7 @@ import {
 import { badRequest, conflict, forbidden, HttpError, notFound, unprocessable } from "../errors.js";
 import { ONBOARDING_FIRST_TASK_SKILL_KEY, PAPERCLIP_CORE_SKILL_KEYS } from "../services/company-skills.js";
 import { FIRST_AGENT_ROLE, withFirstAgentDecision } from "../services/first-agent-ceo.js";
+import { isPermissionRevoked } from "../services/permission-revocations.js";
 import { createRunSecretRedactionRegistry } from "../services/run-secret-redaction.js";
 import { assertAuthenticated, assertBoard, assertCompanyAccess, assertInstanceAdmin, buildActorSecretContext, getAccessibleResource, getActorInfo, hasCompanyAccess } from "./authz.js";
 import { runAdapterLoginStartSpine } from "./adapter-login-route-spine.js";
@@ -5008,6 +5009,21 @@ export function agentRoutes(
         res.status(403).json({ error: "Only a board member can change who approves join requests" });
         return;
       }
+      // A permission a board member turned off stays off until a board
+      // member turns it back on. Refuse before changing anything.
+      const taskAssignWillFollowRole = existing.role === "ceo" || req.body.canCreateAgents;
+      if (
+        !taskAssignWillFollowRole &&
+        req.body.canAssignTasks &&
+        (await isPermissionRevoked(
+          db,
+          { companyId: existing.companyId, principalType: "agent", principalId: existing.id },
+          "tasks:assign",
+        ))
+      ) {
+        res.status(403).json({ error: "A board member turned off task assignment for this agent. Only a board member can turn it back on." });
+        return;
+      }
     } else {
       await assertBoardCanManageAgentsForCompany(req, existing.companyId);
     }
@@ -5020,8 +5036,12 @@ export function agentRoutes(
       return;
     }
 
-    const effectiveCanAssignTasks =
-      agent.role === "ceo" || Boolean(agent.permissions?.canCreateAgents) || req.body.canAssignTasks;
+    // A CEO or an agent that can create agents assigns tasks by role: the agent
+    // page shows the switch locked on and sends `canAssignTasks: true` with
+    // every change. That grant is automatic and never restores a revoked key.
+    // Only an unlocked switch is a person's decision about task assignment.
+    const taskAssignFollowsRole = agent.role === "ceo" || Boolean(agent.permissions?.canCreateAgents);
+    const effectiveCanAssignTasks = taskAssignFollowsRole || req.body.canAssignTasks;
     const grantedByUserId = req.actor.type === "board" ? (req.actor.userId ?? null) : null;
     // Recorded as an explicit decision: turning a permission off is durable,
     // and only a person can turn a revoked permission back on.
@@ -5029,7 +5049,7 @@ export function agentRoutes(
       ? { actorType: "agent" as const, actorId: req.actor.agentId ?? "unknown-agent" }
       : { actorType: "user" as const, actorId: req.actor.userId ?? "board" };
     await access.ensureMembership(agent.companyId, "agent", agent.id, "member", "active");
-    await access.setPrincipalPermission(
+    const taskAssignApplied = await access.setPrincipalPermission(
       agent.companyId,
       "agent",
       agent.id,
@@ -5037,7 +5057,7 @@ export function agentRoutes(
       effectiveCanAssignTasks,
       grantedByUserId,
       null,
-      { decidedBy },
+      taskAssignFollowsRole ? {} : { decidedBy },
     );
     if (canApproveJoins !== undefined) {
       await access.setPrincipalPermission(
@@ -5066,7 +5086,8 @@ export function agentRoutes(
       details: {
         canCreateAgents: agent.permissions?.canCreateAgents ?? false,
         canCreateSkills: agent.permissions?.canCreateSkills ?? true,
-        canAssignTasks: effectiveCanAssignTasks,
+        // What was applied: a revoked grant stays off.
+        canAssignTasks: effectiveCanAssignTasks && taskAssignApplied,
         ...(canApproveJoins !== undefined ? { canApproveJoins } : {}),
         trustPreset: agent.permissions?.trustPreset ?? "standard",
       },

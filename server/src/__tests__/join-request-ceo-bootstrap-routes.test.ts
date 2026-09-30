@@ -430,6 +430,27 @@ describeEmbeddedPostgres("join request approval bootstraps and empowers the comp
     expect(rows).toHaveLength(1);
     expect(await grantKeys(db, company.id, founder!.id)).toContain("joins:approve");
   }, 30_000);
+
+  it("terminates the agent an interrupted approval left behind when the request is then rejected", async () => {
+    const company = await seedCompany(db);
+    const joinRequest = await seedJoinRequest(db, company.id, { requestType: "agent", agentName: "OpenClaw" });
+    // A previous approval created the founder and recorded it, then failed
+    // before it could mark the request approved.
+    const [founder] = await db
+      .insert(agents)
+      .values({ companyId: company.id, name: "OpenClaw", role: "ceo", status: "idle", adapterType: "openclaw_gateway" })
+      .returning();
+    await db.update(joinRequests).set({ createdAgentId: founder!.id }).where(eq(joinRequests.id, joinRequest.id));
+
+    const res = await request(await createApp(db, boardActor(company.id)))
+      .post(`/api/companies/${company.id}/join-requests/${joinRequest.id}/reject`)
+      .send({});
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.status).toBe("rejected");
+    const [left] = await db.select().from(agents).where(eq(agents.id, founder!.id));
+    expect(left!.status).toBe("terminated");
+  }, 30_000);
   it("makes a CEO-approved agent's key accountable to the person the CEO's run token acts for", async () => {
     const company = await seedCompany(db);
     const ceoId = await seedCeo(company.id);

@@ -1788,7 +1788,8 @@ describe.sequential("agent permission routes", () => {
       true,
       "board-user",
       null,
-      { decidedBy: { actorType: "user", actorId: "board-user" } },
+      // Follows the agent-creator role: an automatic grant, not a board decision.
+      {},
     );
     expect(res.body.access.canAssignTasks).toBe(true);
     expect(res.body.access.taskAssignSource).toBe("agent_creator");

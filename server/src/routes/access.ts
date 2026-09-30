@@ -4499,6 +4499,19 @@ export function accessRoutes(
         if (existing.status !== "pending_approval")
           throw conflict("Join request is not pending");
 
+        // An interrupted approval may already have created and recorded the
+        // agent (in an empty company, the founding CEO). Rejecting must not
+        // leave that agent active. Done first, under the decision lock, so a
+        // failure here leaves the request pending for another try.
+        let terminatedAgentId: string | null = null;
+        if (existing.requestType === "agent" && existing.createdAgentId) {
+          const leftover = await agents.getById(existing.createdAgentId);
+          if (leftover && leftover.companyId === companyId && leftover.status !== "terminated") {
+            await agents.terminate(leftover.id);
+            terminatedAgentId = leftover.id;
+          }
+        }
+
         const rejected = await db
           .update(joinRequests)
           .set({
@@ -4524,7 +4537,10 @@ export function accessRoutes(
           action: "join.rejected",
           entityType: "join_request",
           entityId: requestId,
-          details: { requestType: existing.requestType }
+          details: {
+            requestType: existing.requestType,
+            ...(terminatedAgentId ? { terminatedAgentId } : {})
+          }
         });
 
         return toJoinRequestResponse(rejected);

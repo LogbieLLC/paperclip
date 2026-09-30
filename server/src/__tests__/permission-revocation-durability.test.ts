@@ -380,9 +380,30 @@ describeEmbeddedPostgres("a revoked permission stays revoked", () => {
       source: "agent_jwt",
     }))
       .patch(`/api/agents/${worker!.id}/permissions`)
-      .send({ canCreateAgents: false, canAssignTasks: true });
-    expect(ceoOn.status, JSON.stringify(ceoOn.body)).toBe(200);
+      .send({ canCreateAgents: false, canCreateSkills: false, canAssignTasks: true });
+    // Refused outright, not reported as a success, and nothing else changes.
+    expect(ceoOn.status, JSON.stringify(ceoOn.body)).toBe(403);
     expect(await grantKeys(company.id, "agent", worker!.id)).not.toContain("tasks:assign");
+    const [after] = await db.select().from(agents).where(eq(agents.id, worker!.id));
+    expect((after!.permissions as Record<string, unknown>).canCreateSkills).not.toBe(false);
+  }, 60_000);
+
+  it("keeps a CEO's revoked task assignment revoked when the board changes another of its permissions", async () => {
+    const { access } = await services();
+    const company = await seedCompany();
+    const ceo = await seedRootCeo(company.id);
+    await access.setPrincipalPermission(company.id, "agent", ceo.id, "tasks:assign", false, BOARD_USER_ID, null, {
+      decidedBy: { actorType: "user", actorId: BOARD_USER_ID },
+    });
+
+    // The agent page shows task assignment locked on for a CEO, so it sends
+    // canAssignTasks: true with every switch, here "Can create/import skills".
+    const res = await request(await createApp(db, boardActor(company.id)))
+      .patch(`/api/agents/${ceo.id}/permissions`)
+      .send({ canCreateAgents: true, canCreateSkills: false, canAssignTasks: true });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(await grantKeys(company.id, "agent", ceo.id)).not.toContain("tasks:assign");
   }, 60_000);
 
   it("keeps an agent's task assignment revoked when the board turns it off on the agent page", async () => {
@@ -427,7 +448,7 @@ describeEmbeddedPostgres("a revoked permission stays revoked", () => {
         .map((permissionKey) => ({ permissionKey: permissionKey as PermissionKey, scope: null }));
 
       await Promise.all([
-        access.setMemberPermissions(company.id, membership, keep, BOARD_USER_ID),
+        access.setMemberPermissions(company.id, membership, keep, BOARD_USER_ID, { actorType: "user", actorId: BOARD_USER_ID }),
         access.setPrincipalPermission(company.id, "user", adminId, "users:invite", true, null),
       ]);
 
