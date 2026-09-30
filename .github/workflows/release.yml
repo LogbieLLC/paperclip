@@ -163,7 +163,7 @@ jobs:
     name: Publish preview migrator
     needs: [plan_preview, package_preview]
     if: github.ref == 'refs/heads/master' && needs.plan_preview.outputs.packages == 'true' && needs.package_preview.result == 'success'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     # A manual preview and a merge-triggered migrator may compile in parallel.
     # Serialize only publication so they cannot race an immutable npm version,
@@ -178,7 +178,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: useblacksmith/checkout@v1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
@@ -204,7 +204,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: useblacksmith/checkout@v1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ inputs.source_ref }}
           persist-credentials: false
@@ -263,7 +263,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: useblacksmith/checkout@v1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
@@ -294,7 +294,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: useblacksmith/checkout@v1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
@@ -323,7 +323,7 @@ jobs:
       contents: read
       actions: read
     steps:
-      - uses: useblacksmith/checkout@v1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -352,7 +352,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: useblacksmith/checkout@v1
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -446,7 +446,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: useblacksmith/checkout@v1 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup pnpm
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
@@ -500,7 +500,7 @@ jobs:
       canary_version: ${{ steps.select.outputs.canary_version }}
     steps:
       - name: Checkout repository
-        uses: useblacksmith/checkout@v1
+        uses: actions/checkout@v7
         with:
           ref: master
           fetch-depth: 0
@@ -613,7 +613,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: useblacksmith/checkout@v1
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.select_nightly.outputs.sha }}
           fetch-depth: 0
@@ -729,7 +729,7 @@ jobs:
       mode: ${{ steps.select.outputs.mode }}
     steps:
       - name: Checkout repository
-        uses: useblacksmith/checkout@v1
+        uses: actions/checkout@v7
         with:
           ref: master
           fetch-depth: 0
@@ -879,7 +879,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: useblacksmith/checkout@v1
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.select_beta.outputs.sha }}
           fetch-depth: 0
@@ -998,7 +998,7 @@ jobs:
       pull-requests: read
     steps:
       - name: Checkout repository
-        uses: useblacksmith/checkout@v1
+        uses: actions/checkout@v7
         with:
           ref: master
           fetch-depth: 0
@@ -1090,7 +1090,7 @@ jobs:
       notes_ref: ${{ steps.notes.outputs.notes_ref }}
     steps:
       - name: Checkout repository
-        uses: useblacksmith/checkout@v1
+        uses: actions/checkout@v7
         with:
           ref: master
           fetch-depth: 0
@@ -1249,7 +1249,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: useblacksmith/checkout@v1
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ needs.preflight_stable.outputs.sha }}
@@ -1296,7 +1296,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: useblacksmith/checkout@v1
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ needs.preflight_stable.outputs.sha }}
@@ -1440,7 +1440,7 @@ jobs:
       contents: write
     steps:
       - name: Checkout repository
-        uses: useblacksmith/checkout@v1
+        uses: actions/checkout@v7
         with:
           ref: master
           fetch-depth: 0

@@ -27,7 +27,7 @@ jobs:
       branch: ${{ steps.source.outputs.branch }}
       branch_key: ${{ steps.source.outputs.branch_key }}
     steps:
-      - uses: useblacksmith/checkout@v1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - name: Require CODEOWNER initiator and rerunner
@@ -127,7 +127,7 @@ jobs:
       name: storybook-deploy
       url: ${{ steps.deployment.outputs.url }}
     steps:
-      - uses: useblacksmith/checkout@v1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
           sparse-checkout: .github/scripts

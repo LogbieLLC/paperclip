@@ -14,11 +14,14 @@ permissions:
 
 jobs:
   review:
+    # Fork-only (LogbieLLC): the review bot needs upstream's COMMITPERCLIP_KEY
+    # secret, which this fork does not have.
+    if: github.repository == 'paperclipai/paperclip'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - name: Checkout base branch (never PR code)
-        uses: useblacksmith/checkout@v1 # v7.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: master
 

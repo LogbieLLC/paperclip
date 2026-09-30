@@ -169,7 +169,7 @@ jobs:
       artifact_id: ${{ steps.upload.outputs.artifact-id }}
       lock_sha256: ${{ steps.lock.outputs.sha256 }}
     steps:
-      - uses: useblacksmith/checkout@v1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ needs.authorize.outputs.target_sha }}
           persist-credentials: false
@@ -227,7 +227,7 @@ jobs:
       max_parallel: ${{ steps.catalog.outputs.max_parallel }}
       daytona_image_content_id: ${{ steps.daytona_image_content.outputs.content_id }}
     steps:
-      - uses: useblacksmith/checkout@v1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ needs.authorize.outputs.target_sha }}
           persist-credentials: false
@@ -646,7 +646,7 @@ jobs:
         run: echo "Selected cells do not require a remote provider pack."
 
       - if: needs.catalog.outputs.needs_remote_provider_pack == 'true'
-        uses: useblacksmith/checkout@v1 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ needs.authorize.outputs.target_sha }}
           persist-credentials: false
@@ -1089,7 +1089,7 @@ jobs:
       actions: read
       contents: read
     steps:
-      - uses: useblacksmith/checkout@v1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # Reporting and sanitization are part of the trusted workflow boundary.
           ref: ${{ github.sha }}
@@ -1239,7 +1239,7 @@ jobs:
     environment:
       name: runner-e2e-history
     steps:
-      - uses: useblacksmith/checkout@v1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # Never execute target-controlled publication code with AWS credentials.
           ref: ${{ github.sha }}

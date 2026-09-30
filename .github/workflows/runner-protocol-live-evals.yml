@@ -108,7 +108,7 @@ jobs:
           echo "sha=$target_sha" >> "$GITHUB_OUTPUT"
           echo "ref=refs/heads/$TARGET_BRANCH" >> "$GITHUB_OUTPUT"
 
-      - uses: useblacksmith/checkout@v1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -177,7 +177,7 @@ jobs:
       artifact_id: ${{ steps.upload.outputs.artifact-id }}
       lock_sha256: ${{ steps.lock.outputs.sha256 }}
     steps:
-      - uses: useblacksmith/checkout@v1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ needs.authorize.outputs.target_sha }}
           persist-credentials: false
@@ -231,7 +231,7 @@ jobs:
       max_parallel_per_shard: ${{ steps.catalog.outputs.max_parallel_per_shard }}
       selected: ${{ steps.catalog.outputs.selected }}
     steps:
-      - uses: useblacksmith/checkout@v1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -247,7 +247,7 @@ jobs:
           echo "::add-mask::$token"
           echo "value=$token" >> "$GITHUB_OUTPUT"
 
-      - uses: useblacksmith/checkout@v1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: paperclipai/paperclip-evals
           ref: ${{ needs.authorize.outputs.evals_sha }}
@@ -664,7 +664,7 @@ jobs:
     outputs:
       public_report_ready: ${{ steps.public_report.outputs.ready }}
     steps:
-      - uses: useblacksmith/checkout@v1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -680,7 +680,7 @@ jobs:
           echo "::add-mask::$token"
           echo "value=$token" >> "$GITHUB_OUTPUT"
 
-      - uses: useblacksmith/checkout@v1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: paperclipai/paperclip-evals
           ref: ${{ needs.authorize.outputs.evals_sha }}
@@ -855,7 +855,7 @@ jobs:
       name: runner-e2e-history
       url: ${{ steps.publish.outputs.report_url }}
     steps:
-      - uses: useblacksmith/checkout@v1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # AWS credentials can execute only the publisher from the trusted workflow revision.
           ref: ${{ github.sha }}
