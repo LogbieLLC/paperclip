@@ -44,13 +44,13 @@ jobs:
   runner:
     if: github.event_name == 'pull_request'
     name: Compile isolated native Runner
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 20
     permissions:
       contents: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: useblacksmith/checkout@v1 # v7
         with:
           persist-credentials: false
       - name: Set up Docker Buildx
@@ -67,7 +67,7 @@ jobs:
 
   authorize_manual:
     if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
     timeout-minutes: 5
@@ -100,7 +100,7 @@ jobs:
   manual_image:
     name: Build and verify on EC2
     needs: authorize_manual
-    runs-on: runs-on/fleet=paperclip-public-pr-x64/env=public-ci
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 90
     permissions:
       contents: read
@@ -123,7 +123,7 @@ jobs:
           for id in "$ACTOR_ID" "$triggering_id"; do
             jq -e --argjson id "$id" 'index($id) != null' <<< "$ALLOWED_IDS" >/dev/null
           done
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: useblacksmith/checkout@v1 # v7
         with:
           ref: ${{ needs.authorize_manual.outputs.target_sha }}
           persist-credentials: false

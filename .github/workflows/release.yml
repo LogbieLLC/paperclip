@@ -163,7 +163,7 @@ jobs:
     name: Publish preview migrator
     needs: [plan_preview, package_preview]
     if: github.ref == 'refs/heads/master' && needs.plan_preview.outputs.packages == 'true' && needs.package_preview.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 30
     # A manual preview and a merge-triggered migrator may compile in parallel.
     # Serialize only publication so they cannot race an immutable npm version,
@@ -178,7 +178,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: useblacksmith/checkout@v1 # v7
         with:
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
@@ -199,12 +199,12 @@ jobs:
     name: Build preview cloud image
     needs: plan_preview
     if: needs.plan_preview.outputs.image == 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 60
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: useblacksmith/checkout@v1 # v7
         with:
           ref: ${{ inputs.source_ref }}
           persist-credentials: false
@@ -255,7 +255,7 @@ jobs:
     name: Publish preview cloud image
     needs: [plan_preview, image_preview]
     if: github.ref == 'refs/heads/master' && needs.plan_preview.outputs.image == 'true' && needs.image_preview.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 30
     # This existing environment has an external master-only branch policy.
     environment: npm-canary
@@ -263,7 +263,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: useblacksmith/checkout@v1 # v7
         with:
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
@@ -290,11 +290,11 @@ jobs:
       always() && inputs.channel == 'preview' && needs.plan_preview.result == 'success' &&
       (needs.publish_image_preview.result == 'success' || needs.plan_preview.outputs.image == 'false') &&
       (needs.publish_preview.result == 'success' || needs.plan_preview.outputs.packages == 'false')
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: useblacksmith/checkout@v1 # v7
         with:
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
@@ -317,13 +317,13 @@ jobs:
   verify_canary:
     name: Reuse exact-source verification
     if: github.repository == 'paperclipai/paperclip' && github.event_name == 'push' && github.ref == 'refs/heads/master'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 50
     permissions:
       contents: read
       actions: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: useblacksmith/checkout@v1 # v7
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -339,7 +339,7 @@ jobs:
   publish_canary:
     if: github.event_name == 'push'
     needs: verify_canary
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 150
     environment: npm-canary
     outputs:
@@ -352,7 +352,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: useblacksmith/checkout@v1
         with:
           fetch-depth: 0
 
@@ -436,7 +436,7 @@ jobs:
   smoke_canary_onboarding:
     needs: publish_canary
     if: needs.publish_canary.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 20
     permissions:
       contents: read
@@ -446,7 +446,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: useblacksmith/checkout@v1 # v7
 
       - name: Setup pnpm
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
@@ -490,7 +490,7 @@ jobs:
 
   select_nightly:
     if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.channel == 'nightly')
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     permissions:
       contents: read
@@ -500,7 +500,7 @@ jobs:
       canary_version: ${{ steps.select.outputs.canary_version }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: useblacksmith/checkout@v1
         with:
           ref: master
           fetch-depth: 0
@@ -595,7 +595,7 @@ jobs:
       needs.select_nightly.outputs.proceed == 'true' &&
       (needs.smoke_nightly.result == 'success' ||
        (needs.smoke_nightly.result == 'skipped' && github.event_name == 'workflow_dispatch' && inputs.dry_run))
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 150
     environment: npm-canary
     # The workflow-level concurrency group is per event, so a forced dispatch
@@ -613,7 +613,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: useblacksmith/checkout@v1
         with:
           ref: ${{ needs.select_nightly.outputs.sha }}
           fetch-depth: 0
@@ -719,7 +719,7 @@ jobs:
 
   select_beta:
     if: github.event_name == 'workflow_dispatch' && inputs.channel == 'beta'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     permissions:
       contents: read
@@ -729,7 +729,7 @@ jobs:
       mode: ${{ steps.select.outputs.mode }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: useblacksmith/checkout@v1
         with:
           ref: master
           fetch-depth: 0
@@ -861,7 +861,7 @@ jobs:
       needs.select_beta.result == 'success' &&
       (needs.verify_beta_candidate.result == 'success' ||
        (needs.verify_beta_candidate.result == 'skipped' && needs.select_beta.outputs.mode == 'promote'))
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 150
     environment: npm-beta
     # Serialize beta publishes so two dispatches cannot race to the same next
@@ -879,7 +879,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: useblacksmith/checkout@v1
         with:
           ref: ${{ needs.select_beta.outputs.sha }}
           fetch-depth: 0
@@ -989,7 +989,7 @@ jobs:
   draft_stable_notes:
     needs: [select_beta, publish_beta]
     if: ${{ !cancelled() && !inputs.dry_run && needs.publish_beta.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     permissions:
       contents: write
@@ -998,7 +998,7 @@ jobs:
       pull-requests: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: useblacksmith/checkout@v1
         with:
           ref: master
           fetch-depth: 0
@@ -1077,7 +1077,7 @@ jobs:
   # published at another.
   preflight_stable:
     if: github.event_name == 'workflow_dispatch' && inputs.channel == 'stable'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     permissions:
       contents: read
@@ -1090,7 +1090,7 @@ jobs:
       notes_ref: ${{ steps.notes.outputs.notes_ref }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: useblacksmith/checkout@v1
         with:
           ref: master
           fetch-depth: 0
@@ -1242,14 +1242,14 @@ jobs:
   preview_stable:
     if: github.event_name == 'workflow_dispatch' && inputs.channel == 'stable' && inputs.dry_run
     needs: [preflight_stable, verify_stable]
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 45
     permissions:
       contents: read
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: useblacksmith/checkout@v1
         with:
           fetch-depth: 0
           ref: ${{ needs.preflight_stable.outputs.sha }}
@@ -1284,7 +1284,7 @@ jobs:
   publish_stable:
     if: github.event_name == 'workflow_dispatch' && inputs.channel == 'stable' && !inputs.dry_run
     needs: [preflight_stable, verify_stable]
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 150
     environment: npm-stable
     permissions:
@@ -1296,7 +1296,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: useblacksmith/checkout@v1
         with:
           fetch-depth: 0
           ref: ${{ needs.preflight_stable.outputs.sha }}
@@ -1434,13 +1434,13 @@ jobs:
   canonicalize_stable_notes:
     needs: [preflight_stable, publish_stable]
     if: ${{ needs.preflight_stable.outputs.notes_mode == 'master_beta' && needs.publish_stable.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     permissions:
       contents: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: useblacksmith/checkout@v1
         with:
           ref: master
           fetch-depth: 0

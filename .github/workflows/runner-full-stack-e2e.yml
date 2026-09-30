@@ -56,7 +56,7 @@ jobs:
   authorize:
     name: Authorize paid campaign
     if: github.event_name != 'schedule' || vars.RUNNER_FULL_STACK_E2E_NIGHTLY_ENABLED == 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     permissions:
       contents: read
@@ -161,7 +161,7 @@ jobs:
   target_lock:
     name: Resolve target pnpm lockfile
     needs: authorize
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     permissions:
       contents: read
@@ -169,7 +169,7 @@ jobs:
       artifact_id: ${{ steps.upload.outputs.artifact-id }}
       lock_sha256: ${{ steps.lock.outputs.sha256 }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: useblacksmith/checkout@v1 # v7
         with:
           ref: ${{ needs.authorize.outputs.target_sha }}
           persist-credentials: false
@@ -213,7 +213,7 @@ jobs:
     name: Validate catalog and select cells
     needs: [authorize, target_lock]
     if: github.event_name != 'schedule' || vars.RUNNER_FULL_STACK_E2E_NIGHTLY_ENABLED == 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     permissions:
       contents: read
@@ -227,7 +227,7 @@ jobs:
       max_parallel: ${{ steps.catalog.outputs.max_parallel }}
       daytona_image_content_id: ${{ steps.daytona_image_content.outputs.content_id }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: useblacksmith/checkout@v1 # v7
         with:
           ref: ${{ needs.authorize.outputs.target_sha }}
           persist-credentials: false
@@ -634,7 +634,7 @@ jobs:
     needs:
       [authorize, target_lock, catalog, daytona_image, build_runner_artifacts]
     if: github.event_name != 'schedule' || vars.RUNNER_FULL_STACK_E2E_NIGHTLY_ENABLED == 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 15
     permissions:
       contents: read
@@ -646,7 +646,7 @@ jobs:
         run: echo "Selected cells do not require a remote provider pack."
 
       - if: needs.catalog.outputs.needs_remote_provider_pack == 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: useblacksmith/checkout@v1 # v7
         with:
           ref: ${{ needs.authorize.outputs.target_sha }}
           persist-credentials: false
@@ -1083,13 +1083,13 @@ jobs:
     needs: [authorize, catalog, daytona_image, test]
     outputs:
       history_source_ready: ${{ steps.history_source_ready.outputs.ready }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 15
     permissions:
       actions: read
       contents: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: useblacksmith/checkout@v1 # v7
         with:
           # Reporting and sanitization are part of the trusted workflow boundary.
           ref: ${{ github.sha }}
@@ -1226,7 +1226,7 @@ jobs:
     name: Publish S3 history and Pages bundle with declared screenshots
     needs: [authorize, catalog, report]
     if: always() && needs.catalog.result == 'success' && needs.report.outputs.history_source_ready == 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 15
     outputs:
       pages_artifact_name: ${{ steps.pages_artifact_name.outputs.name }}
@@ -1239,7 +1239,7 @@ jobs:
     environment:
       name: runner-e2e-history
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: useblacksmith/checkout@v1 # v7
         with:
           # Never execute target-controlled publication code with AWS credentials.
           ref: ${{ github.sha }}
@@ -1303,7 +1303,7 @@ jobs:
     name: Publish latest dashboard with declared screenshots
     needs: [report, publish_history]
     if: always() && needs.report.outputs.history_source_ready == 'true' && needs.publish_history.result == 'success' && vars.RUNNER_FULL_STACK_E2E_PUBLISH_PAGES == 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       pages: write
       id-token: write

@@ -20,14 +20,14 @@ permissions:
 jobs:
   authorize:
     name: Authorize Storybook publisher
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     outputs:
       sha: ${{ steps.source.outputs.sha }}
       branch: ${{ steps.source.outputs.branch }}
       branch_key: ${{ steps.source.outputs.branch_key }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: useblacksmith/checkout@v1 # v7
         with:
           persist-credentials: false
       - name: Require CODEOWNER initiator and rerunner
@@ -65,7 +65,7 @@ jobs:
     name: Build selected branch Storybook
     permissions: {}
     needs: authorize
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     outputs:
       artifact_name: ${{ steps.artifact.outputs.name }}
@@ -115,7 +115,7 @@ jobs:
   deploy:
     name: Publish branch Storybook to S3
     needs: [authorize, build]
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 15
     concurrency:
       group: storybook-deploy-${{ needs.authorize.outputs.branch_key }}
@@ -127,7 +127,7 @@ jobs:
       name: storybook-deploy
       url: ${{ steps.deployment.outputs.url }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: useblacksmith/checkout@v1 # v7
         with:
           persist-credentials: false
           sparse-checkout: .github/scripts
