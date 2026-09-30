@@ -246,9 +246,10 @@ describeEmbeddedPostgres("first agent in a company becomes the CEO", () => {
     const ceos = rows.filter((row) => row.role === "ceo" && row.reportsTo === null);
     expect(ceos).toHaveLength(1);
     const other = rows.find((row) => row.id !== ceos[0]!.id)!;
-    // The later agent keeps the role its request asked for and reports to the CEO.
+    // The later agent is filed like any normal hire: the role and manager its
+    // request asked for.
     expect(other.role).toBe(other.name === "Ada" ? "general" : "engineer");
-    expect(other.reportsTo).toBe(ceos[0]!.id);
+    expect(other.reportsTo).toBeNull();
     expect(await agentGrantKeys(db, company.id, ceos[0]!.id)).toEqual(ROOT_CEO_GRANT_KEYS);
   }, 30_000);
 
@@ -274,4 +275,25 @@ describeEmbeddedPostgres("first agent in a company becomes the CEO", () => {
     expect(grace!.role).toBe("ceo");
     expect(grace!.reportsTo).toBeNull();
   }, 30_000);
+  it("makes exactly one CEO when five first hires arrive at the same time", async () => {
+    const company = await seedCompany(db);
+    const app = createApp(db, boardActor(company.id));
+
+    const results = await Promise.all(
+      ["A", "B", "C", "D", "E"].map((name) =>
+        request(app)
+          .post(`/api/companies/${company.id}/agent-hires`)
+          .send({ name: `Hire ${name}`, role: "engineer", adapterType: "process", adapterConfig: {} }),
+      ),
+    );
+    for (const res of results) expect(res.status, JSON.stringify(res.body)).toBe(201);
+
+    const rows = await db.select().from(agents).where(eq(agents.companyId, company.id));
+    const ceos = rows.filter((row) => row.role === "ceo");
+    expect(ceos).toHaveLength(1);
+    expect(ceos[0]!.reportsTo).toBeNull();
+    for (const row of rows.filter((entry) => entry.id !== ceos[0]!.id)) {
+      expect(row.role).toBe("engineer");
+    }
+  }, 60_000);
 });

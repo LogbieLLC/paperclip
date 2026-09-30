@@ -57,8 +57,22 @@ function boardActor(companyId: string): Express.Request["actor"] {
   };
 }
 
-function agentActor(companyId: string, agentId: string): Express.Request["actor"] {
-  return { type: "agent", agentId, companyId, runId: null, source: "agent_jwt" };
+function agentActor(
+  companyId: string,
+  agentId: string,
+  onBehalfOfUserId: string | null = "board-user",
+): Express.Request["actor"] {
+  return {
+    type: "agent",
+    agentId,
+    companyId,
+    runId: null,
+    source: "agent_jwt",
+    onBehalfOfUserId,
+    onBehalfOfMemberships: onBehalfOfUserId
+      ? [{ companyId, membershipRole: "owner", status: "active" }]
+      : [],
+  };
 }
 
 async function createApp(db: Db, actor: Express.Request["actor"]) {
@@ -415,5 +429,87 @@ describeEmbeddedPostgres("join request approval bootstraps and empowers the comp
     const rows = await db.select().from(agents).where(eq(agents.companyId, company.id));
     expect(rows).toHaveLength(1);
     expect(await grantKeys(db, company.id, founder!.id)).toContain("joins:approve");
+  }, 30_000);
+  it("makes a CEO-approved agent's key accountable to the person the CEO's run token acts for", async () => {
+    const company = await seedCompany(db);
+    const ceoId = await seedCeo(company.id);
+    const joinRequest = await seedJoinRequest(db, company.id, { requestType: "agent" });
+    const claimSecret = "run-token-claim-secret-0123456789";
+    await db
+      .update(joinRequests)
+      .set({
+        claimSecretHash: createHash("sha256").update(claimSecret).digest("hex"),
+        claimSecretExpiresAt: new Date(Date.now() + 60 * 60 * 1000),
+      })
+      .where(eq(joinRequests.id, joinRequest.id));
+
+    // No run row, no key, and no company default: only the token's identity.
+    const approve = await request(await createApp(db, agentActor(company.id, ceoId, "run-owner")))
+      .post(`/api/companies/${company.id}/join-requests/${joinRequest.id}/approve`)
+      .send({});
+    expect(approve.status, JSON.stringify(approve.body)).toBe(200);
+
+    const claim = await request(await createApp(db, boardActor(company.id)))
+      .post(`/api/join-requests/${joinRequest.id}/claim-api-key`)
+      .send({ claimSecret });
+    expect(claim.status, JSON.stringify(claim.body)).toBe(201);
+    const [key] = await db.select().from(agentApiKeys).where(eq(agentApiKeys.id, claim.body.keyId));
+    expect(key!.responsibleUserId).toBe("run-owner");
+  }, 30_000);
+
+  it("refuses an agent approval that could only issue a key nobody is accountable for", async () => {
+    const company = await seedCompany(db);
+    const ceoId = await seedCeo(company.id);
+    const joinRequest = await seedJoinRequest(db, company.id, { requestType: "agent", agentName: "Nobody's" });
+
+    const res = await request(await createApp(db, agentActor(company.id, ceoId, null)))
+      .post(`/api/companies/${company.id}/join-requests/${joinRequest.id}/approve`)
+      .send({});
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toContain("responsible");
+    const [unchanged] = await db.select().from(joinRequests).where(eq(joinRequests.id, joinRequest.id));
+    expect(unchanged!.status).toBe("pending_approval");
+    const named = await db.select().from(agents).where(eq(agents.name, "Nobody's"));
+    expect(named).toHaveLength(0);
+  }, 30_000);
+
+  it("never leaves an agent behind when the same join request is approved and rejected at the same time", async () => {
+    const company = await seedCompany(db);
+    await seedCeo(company.id);
+    const app = await createApp(db, boardActor(company.id));
+    for (let round = 0; round < 5; round += 1) {
+      const joinRequest = await seedJoinRequest(db, company.id, { requestType: "agent", agentName: `Racer ${round}` });
+      const [approve, reject] = await Promise.all([
+        request(app).post(`/api/companies/${company.id}/join-requests/${joinRequest.id}/approve`).send({}),
+        request(app).post(`/api/companies/${company.id}/join-requests/${joinRequest.id}/reject`).send({}),
+      ]);
+      expect([approve.status, reject.status].sort()).toEqual([200, 409]);
+      const [decided] = await db.select().from(joinRequests).where(eq(joinRequests.id, joinRequest.id));
+      const live = (await db.select().from(agents).where(eq(agents.companyId, company.id)))
+        .filter((row) => row.name.startsWith(`Racer ${round}`) && row.status !== "terminated");
+      if (decided!.status === "approved") {
+        expect(live.map((row) => row.id)).toEqual([decided!.createdAgentId]);
+      } else {
+        expect(live).toHaveLength(0);
+      }
+    }
+  }, 60_000);
+
+  it("creates one agent when the same join request is approved twice at the same time", async () => {
+    const company = await seedCompany(db);
+    await seedCeo(company.id);
+    const app = await createApp(db, boardActor(company.id));
+    const joinRequest = await seedJoinRequest(db, company.id, { requestType: "agent", agentName: "Twice" });
+
+    const results = await Promise.all([
+      request(app).post(`/api/companies/${company.id}/join-requests/${joinRequest.id}/approve`).send({}),
+      request(app).post(`/api/companies/${company.id}/join-requests/${joinRequest.id}/approve`).send({}),
+    ]);
+
+    expect(results.map((res) => res.status).sort()).toEqual([200, 409]);
+    const live = (await db.select().from(agents).where(eq(agents.companyId, company.id)))
+      .filter((row) => row.name.startsWith("Twice") && row.status !== "terminated");
+    expect(live).toHaveLength(1);
   }, 30_000);
 });

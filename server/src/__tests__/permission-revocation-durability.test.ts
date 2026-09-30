@@ -410,4 +410,28 @@ describeEmbeddedPostgres("a revoked permission stays revoked", () => {
     expect(on.status, JSON.stringify(on.body)).toBe(200);
     expect(await grantKeys(company.id, "agent", worker!.id)).toContain("tasks:assign");
   }, 60_000);
+  it("never leaves a revoked permission granted when an automatic grant races the revoke", async () => {
+    const { access } = await services();
+    const company = await seedCompany();
+    const adminId = await seedHumanMember(company.id, "admin");
+    const membership = await memberId(company.id, "user", adminId);
+
+    for (let round = 0; round < 10; round += 1) {
+      // Start granted, with no revocation on record.
+      await db.delete(principalPermissionRevocations);
+      await access.setPrincipalPermission(company.id, "user", adminId, "users:invite", true, null, null, {
+        decidedBy: { actorType: "user", actorId: BOARD_USER_ID },
+      });
+      const keep = (await grantKeys(company.id, "user", adminId))
+        .filter((key) => key !== "users:invite")
+        .map((permissionKey) => ({ permissionKey: permissionKey as PermissionKey, scope: null }));
+
+      await Promise.all([
+        access.setMemberPermissions(company.id, membership, keep, BOARD_USER_ID),
+        access.setPrincipalPermission(company.id, "user", adminId, "users:invite", true, null),
+      ]);
+
+      expect(await grantKeys(company.id, "user", adminId)).not.toContain("users:invite");
+    }
+  }, 60_000);
 });

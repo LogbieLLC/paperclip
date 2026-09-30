@@ -5,7 +5,7 @@ import { approvalComments, approvals } from "@paperclipai/db";
 import { notFound, unprocessable } from "../errors.js";
 import { redactCurrentUserText } from "../log-redaction.js";
 import { agentService } from "./agents.js";
-import { companyAwaitsFirstAgent, FIRST_AGENT_ROLE, settleFoundingCeo } from "./first-agent-ceo.js";
+import { FIRST_AGENT_ROLE, withFirstAgentDecision } from "./first-agent-ceo.js";
 import { budgetService } from "./budgets.js";
 import { notifyHireApproved } from "./hire-hook.js";
 import { instanceSettingsService } from "./instance-settings.js";
@@ -162,8 +162,7 @@ export function approvalService(db: Db) {
         } else {
           // The company's first agent is its CEO, whatever the request asked.
           const requestedRole = String(payload.role ?? "general");
-          const isFirstAgent = await companyAwaitsFirstAgent(db, updated.companyId);
-          const created = await agentsSvc.create(updated.companyId, {
+          const created = await withFirstAgentDecision(db, updated.companyId, (isFirstAgent) => agentsSvc.create(updated.companyId, {
             name: String(payload.name ?? "New Agent"),
             appearance: payload.appearance == null ? undefined : agentAppearanceSchema.parse(payload.appearance),
             role: isFirstAgent ? FIRST_AGENT_ROLE : requestedRole,
@@ -185,15 +184,8 @@ export function approvalService(db: Db) {
             spentMonthlyCents: 0,
             permissions: undefined,
             lastHeartbeatAt: null,
-          });
+          }));
           hireApprovedAgentId = created?.id ?? null;
-          if (created && isFirstAgent) {
-            await settleFoundingCeo(db, {
-              companyId: updated.companyId,
-              agentId: created.id,
-              fallbackRole: requestedRole,
-            });
-          }
         }
         if (hireApprovedAgentId) {
           // A hire held for board approval (the company's first CEO among

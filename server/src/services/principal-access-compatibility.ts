@@ -3,7 +3,7 @@ import type { Db } from "@paperclipai/db";
 import { agents, companyMemberships, principalPermissionGrants } from "@paperclipai/db";
 import type { PermissionKey, PrincipalType } from "@paperclipai/shared";
 import { grantsForHumanRole, normalizeHumanRole } from "./company-member-roles.js";
-import { listRevokedPermissionKeys } from "./permission-revocations.js";
+import { listRevokedPermissionKeys, lockPrincipalPermissions } from "./permission-revocations.js";
 
 type GrantInput = {
   permissionKey: PermissionKey;
@@ -25,38 +25,44 @@ export async function insertMissingPrincipalGrants(
     grantedByUserId: string | null;
   },
 ): Promise<number> {
+  if (input.grants.length === 0) return 0;
+
   // Default grants (startup backfill, login sync, member copies) never restore
-  // a key someone revoked.
-  const revoked = await listRevokedPermissionKeys(db, input);
-  const grants = input.grants.filter((grant) => !revoked.has(grant.permissionKey));
-  if (grants.length === 0) return 0;
+  // a key someone revoked. The check and the insert share the principal's lock.
+  return db.transaction(async (tx) => {
+    const txDb = tx as unknown as Db;
+    await lockPrincipalPermissions(txDb, input);
+    const revoked = await listRevokedPermissionKeys(txDb, input);
+    const grants = input.grants.filter((grant) => !revoked.has(grant.permissionKey));
+    if (grants.length === 0) return 0;
 
-  const now = new Date();
-  const inserted = await db
-    .insert(principalPermissionGrants)
-    .values(
-      grants.map((grant) => ({
-        companyId: input.companyId,
-        principalType: input.principalType,
-        principalId: input.principalId,
-        permissionKey: grant.permissionKey,
-        scope: grant.scope ?? null,
-        grantedByUserId: input.grantedByUserId,
-        createdAt: now,
-        updatedAt: now,
-      })),
-    )
-    .onConflictDoNothing({
-      target: [
-        principalPermissionGrants.companyId,
-        principalPermissionGrants.principalType,
-        principalPermissionGrants.principalId,
-        principalPermissionGrants.permissionKey,
-      ],
-    })
-    .returning({ id: principalPermissionGrants.id });
+    const now = new Date();
+    const inserted = await tx
+      .insert(principalPermissionGrants)
+      .values(
+        grants.map((grant) => ({
+          companyId: input.companyId,
+          principalType: input.principalType,
+          principalId: input.principalId,
+          permissionKey: grant.permissionKey,
+          scope: grant.scope ?? null,
+          grantedByUserId: input.grantedByUserId,
+          createdAt: now,
+          updatedAt: now,
+        })),
+      )
+      .onConflictDoNothing({
+        target: [
+          principalPermissionGrants.companyId,
+          principalPermissionGrants.principalType,
+          principalPermissionGrants.principalId,
+          principalPermissionGrants.permissionKey,
+        ],
+      })
+      .returning({ id: principalPermissionGrants.id });
 
-  return inserted.length;
+    return inserted.length;
+  });
 }
 
 export async function ensureHumanRoleDefaultGrants(

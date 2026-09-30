@@ -21,8 +21,9 @@ vi.mock("../services/hire-hook.js", () => ({
 // database-backed coverage in first-agent-ceo-routes.test.ts.
 vi.mock("../services/first-agent-ceo.js", () => ({
   FIRST_AGENT_ROLE: "ceo",
-  companyAwaitsFirstAgent: vi.fn(async () => false),
-  settleFoundingCeo: vi.fn(),
+  withFirstAgentDecision: vi.fn(
+    async (_db: unknown, _companyId: string, create: (isFirstAgent: boolean) => Promise<unknown>) => create(false),
+  ),
 }));
 
 type ApprovalRecord = {

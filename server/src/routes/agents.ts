@@ -91,7 +91,7 @@ import {
 } from "../services/index.js";
 import { badRequest, conflict, forbidden, HttpError, notFound, unprocessable } from "../errors.js";
 import { ONBOARDING_FIRST_TASK_SKILL_KEY, PAPERCLIP_CORE_SKILL_KEYS } from "../services/company-skills.js";
-import { companyAwaitsFirstAgent, FIRST_AGENT_ROLE, settleFoundingCeo } from "../services/first-agent-ceo.js";
+import { companyAwaitsFirstAgent, FIRST_AGENT_ROLE, withFirstAgentDecision } from "../services/first-agent-ceo.js";
 import { createRunSecretRedactionRegistry } from "../services/run-secret-redaction.js";
 import { assertAuthenticated, assertBoard, assertCompanyAccess, assertInstanceAdmin, buildActorSecretContext, getAccessibleResource, getActorInfo, hasCompanyAccess } from "./authz.js";
 import { runAdapterLoginStartSpine } from "./adapter-login-route-spine.js";
@@ -4501,6 +4501,7 @@ export function agentRoutes(
     // asked for. Resolved before the role-driven skill defaults below so the
     // CEO also receives the core CEO skills.
     const hireRequestedRole = hireInput.role;
+    const hireRequestedReportsTo = hireInput.reportsTo ?? null;
     const hireIsFirstAgent = await companyAwaitsFirstAgent(db, companyId);
     if (hireIsFirstAgent) {
       hireInput.role = FIRST_AGENT_ROLE;
@@ -4622,50 +4623,48 @@ export function agentRoutes(
       const status = requiresApproval ? "pending_approval" : "idle";
       const managedHireBinding = normalizedHireInput.runtimeConfig?.aiConnection ? aiConnectionBindingSchema.parse(normalizedHireInput.runtimeConfig.aiConnection) : undefined;
       const managedHireConnectionId = managedHireBinding ? await validateManagedAgentBinding(req, companyId, hiredAgentId, normalizedHireInput.adapterType, normalizedHireInput.adapterConfig, managedHireBinding, normalizedHireInput.defaultEnvironmentId, false, true) : undefined;
-      let createdAgent = await svc.create(
-        companyId,
-        {
-          id: hiredAgentId,
-          ...normalizedHireInput,
-          status,
-          spentMonthlyCents: 0,
-          lastHeartbeatAt: null,
-        },
-        {
-          aiConnectionInstall: managedHireConnectionId ? { connectionId: managedHireConnectionId, createdByUserId: responsibleUserForAiRequest(req) } : undefined,
-          claudeLogin: {
-            storedSessionId: hireStoredSessionId ?? null,
-            ownerUserId: req.actor.type === "agent" ? null : (req.actor.userId ?? null),
-            // The apply-existing path runs only for a user actor. The owner comes
-            // from the actor, so an agent actor never reaches the no-claim bind.
-            applyExistingWithoutClaim:
-              req.actor.type !== "agent" && hireApplyStoredClaudeLogin === true,
-            // Set only when an agent actor hired this child and the merge above
-            // inherited the parent's fixed Claude OAuth reference. The service
-            // re-reads this named parent inside the write transaction before it
-            // permits the bind, so this identifier is a claim to verify, not a
-            // trusted value.
-            inheritedFromAgentId:
-              req.actor.type === "agent" && authInheritance.inheritedFixedClaudeOAuthBinding
-                ? req.actor.agentId
-                : null,
-          },
-        },
-      );
-      // Another first-agent request may have founded the company meanwhile.
-      // Settle before the approval records the role it will replay.
-      if (hireIsFirstAgent) {
-        const settled = await settleFoundingCeo(db, {
-          companyId,
-          agentId: createdAgent.id,
-          fallbackRole: hireRequestedRole,
-        });
-        if (settled.demoted) {
+      // The first-agent decision is re-read, and the agent inserted, under a
+      // company lock, so overlapping first hires cannot both become CEO. It
+      // runs before the approval records the role it will replay.
+      const createdAgent = await withFirstAgentDecision(db, companyId, async (isFirstAgent) => {
+        if (isFirstAgent) {
+          normalizedHireInput.role = FIRST_AGENT_ROLE;
+          normalizedHireInput.reportsTo = null;
+        } else if (hireIsFirstAgent) {
           normalizedHireInput.role = hireRequestedRole;
-          normalizedHireInput.reportsTo = settled.founderId;
-          createdAgent = (await svc.getById(createdAgent.id)) ?? createdAgent;
+          normalizedHireInput.reportsTo = hireRequestedReportsTo;
         }
-      }
+        return svc.create(
+          companyId,
+          {
+            id: hiredAgentId,
+            ...normalizedHireInput,
+            status,
+            spentMonthlyCents: 0,
+            lastHeartbeatAt: null,
+          },
+          {
+            aiConnectionInstall: managedHireConnectionId ? { connectionId: managedHireConnectionId, createdByUserId: responsibleUserForAiRequest(req) } : undefined,
+            claudeLogin: {
+              storedSessionId: hireStoredSessionId ?? null,
+              ownerUserId: req.actor.type === "agent" ? null : (req.actor.userId ?? null),
+              // The apply-existing path runs only for a user actor. The owner comes
+              // from the actor, so an agent actor never reaches the no-claim bind.
+              applyExistingWithoutClaim:
+                req.actor.type !== "agent" && hireApplyStoredClaudeLogin === true,
+              // Set only when an agent actor hired this child and the merge above
+              // inherited the parent's fixed Claude OAuth reference. The service
+              // re-reads this named parent inside the write transaction before it
+              // permits the bind, so this identifier is a claim to verify, not a
+              // trusted value.
+              inheritedFromAgentId:
+                req.actor.type === "agent" && authInheritance.inheritedFixedClaudeOAuthBinding
+                  ? req.actor.agentId
+                  : null,
+            },
+          },
+        );
+      });
       const onboardingFirstAgentBundle = await resolveOnboardingFirstAgentBundle({
         onboardingFirstAgent: hireOnboardingFirstAgent,
         actorType: req.actor.type,
@@ -4836,6 +4835,7 @@ export function agentRoutes(
     // The company's first agent is its CEO whatever it is named or the client
     // asked for (see the hire route).
     const createRequestedRole = createInput.role;
+    const createRequestedReportsTo = createInput.reportsTo ?? null;
     const createIsFirstAgent = await companyAwaitsFirstAgent(db, companyId);
     if (createIsFirstAgent) {
       createInput.role = FIRST_AGENT_ROLE;
@@ -4898,38 +4898,39 @@ export function agentRoutes(
 
     const managedBinding = normalizedRuntimeConfig.aiConnection ? aiConnectionBindingSchema.parse(normalizedRuntimeConfig.aiConnection) : undefined;
     const managedConnectionId = managedBinding ? await validateManagedAgentBinding(req, companyId, agentId, createInput.adapterType, normalizedAdapterConfig, managedBinding, createInput.defaultEnvironmentId, false, true) : undefined;
-    let createdAgent = await svc.create(
-      companyId,
-      {
-        id: agentId,
-        ...createInput,
-        adapterConfig: normalizedAdapterConfig,
-        runtimeConfig: normalizedRuntimeConfig,
-        status: "idle",
-        spentMonthlyCents: 0,
-        lastHeartbeatAt: null,
-      },
-      {
-        aiConnectionInstall: managedConnectionId ? { connectionId: managedConnectionId, createdByUserId: responsibleUserForAiRequest(req) } : undefined,
-        claudeLogin: {
-          storedSessionId: createStoredSessionId ?? null,
-          ownerUserId: req.actor.type === "agent" ? null : (req.actor.userId ?? null),
-          // The apply-existing path runs only for a user actor. The owner comes
-          // from the actor, so an agent actor never reaches the no-claim bind.
-          applyExistingWithoutClaim:
-            req.actor.type !== "agent" && createApplyStoredClaudeLogin === true,
-        },
-      },
-    );
-    // Another first-agent request may have founded the company meanwhile.
-    if (createIsFirstAgent) {
-      const settled = await settleFoundingCeo(db, {
+    // See the hire route: decide and insert under the company's first-agent lock.
+    const createdAgent = await withFirstAgentDecision(db, companyId, async (isFirstAgent) => {
+      if (isFirstAgent) {
+        createInput.role = FIRST_AGENT_ROLE;
+        createInput.reportsTo = null;
+      } else if (createIsFirstAgent) {
+        createInput.role = createRequestedRole;
+        createInput.reportsTo = createRequestedReportsTo;
+      }
+      return svc.create(
         companyId,
-        agentId: createdAgent.id,
-        fallbackRole: createRequestedRole,
-      });
-      if (settled.demoted) createdAgent = (await svc.getById(createdAgent.id)) ?? createdAgent;
-    }
+        {
+          id: agentId,
+          ...createInput,
+          adapterConfig: normalizedAdapterConfig,
+          runtimeConfig: normalizedRuntimeConfig,
+          status: "idle",
+          spentMonthlyCents: 0,
+          lastHeartbeatAt: null,
+        },
+        {
+          aiConnectionInstall: managedConnectionId ? { connectionId: managedConnectionId, createdByUserId: responsibleUserForAiRequest(req) } : undefined,
+          claudeLogin: {
+            storedSessionId: createStoredSessionId ?? null,
+            ownerUserId: req.actor.type === "agent" ? null : (req.actor.userId ?? null),
+            // The apply-existing path runs only for a user actor. The owner comes
+            // from the actor, so an agent actor never reaches the no-claim bind.
+            applyExistingWithoutClaim:
+              req.actor.type !== "agent" && createApplyStoredClaudeLogin === true,
+          },
+        },
+      );
+    });
     const onboardingFirstAgentBundle = await resolveOnboardingFirstAgentBundle({
       onboardingFirstAgent: createOnboardingFirstAgent,
       actorType: req.actor.type,

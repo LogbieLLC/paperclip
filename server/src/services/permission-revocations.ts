@@ -1,4 +1,4 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { principalPermissionRevocations } from "@paperclipai/db";
 import type { PrincipalType } from "@paperclipai/shared";
@@ -14,6 +14,7 @@ import type { PrincipalType } from "@paperclipai/shared";
  */
 
 type Executor = Pick<Db, "select" | "insert" | "delete">;
+type LockExecutor = Pick<Db, "execute">;
 
 export type PermissionDecisionActor = {
   actorType: "user" | "agent";
@@ -32,6 +33,18 @@ function principalConditions(principal: PrincipalRef) {
     eq(principalPermissionRevocations.principalType, principal.principalType),
     eq(principalPermissionRevocations.principalId, principal.principalId),
   ];
+}
+
+/**
+ * Serializes every grant and revocation write for one principal. Take it at
+ * the start of the transaction that reads revocations and writes grants, so an
+ * automatic grant cannot read "not revoked", lose a race to a revoke, and then
+ * insert the grant anyway. Released when the transaction ends.
+ */
+export async function lockPrincipalPermissions(tx: LockExecutor, principal: PrincipalRef) {
+  await tx.execute(
+    sql`select pg_advisory_xact_lock(hashtextextended(${`paperclip:principal-permissions:${principal.companyId}:${principal.principalType}:${principal.principalId}`}, 0))`,
+  );
 }
 
 export async function listRevokedPermissionKeys(db: Executor, principal: PrincipalRef): Promise<Set<string>> {

@@ -20,6 +20,7 @@ import { assertAssignableAgent } from "./agent-assignability.js";
 import { authorizationService, type AuthorizationActor, type AuthorizationResource } from "./authorization.js";
 import { ensureHumanRoleDefaultGrants } from "./principal-access-compatibility.js";
 import {
+  lockPrincipalPermissions,
   recordPermissionRevocations,
   resolveGrantableKeys,
   type PermissionDecisionActor,
@@ -459,6 +460,7 @@ export function accessService(db: Db) {
     requestedGrants: GrantInput[],
     decidedBy: PermissionDecisionActor,
   ): Promise<GrantInput[]> {
+    await lockPrincipalPermissions(executor, principal);
     const currentKeys = await executor
       .select({ permissionKey: principalPermissionGrants.permissionKey })
       .from(principalPermissionGrants)
@@ -970,6 +972,7 @@ export function accessService(db: Db) {
     await db.transaction(async (tx) => {
       // An automatic replace (invite approval or replay, join approval, plugin)
       // never restores a key someone revoked.
+      await lockPrincipalPermissions(tx as unknown as Db, { companyId, principalType, principalId });
       const grantable = await resolveGrantableKeys(
         tx as unknown as Db,
         { companyId, principalType, principalId },
@@ -1072,63 +1075,58 @@ export function accessService(db: Db) {
     } = {},
   ) {
     const principal = { companyId, principalType, principalId };
+    const principalGrantConditions = and(
+      eq(principalPermissionGrants.companyId, companyId),
+      eq(principalPermissionGrants.principalType, principalType),
+      eq(principalPermissionGrants.principalId, principalId),
+      eq(principalPermissionGrants.permissionKey, permissionKey),
+    );
     if (!enabled) {
-      await db
-        .delete(principalPermissionGrants)
-        .where(
-          and(
-            eq(principalPermissionGrants.companyId, companyId),
-            eq(principalPermissionGrants.principalType, principalType),
-            eq(principalPermissionGrants.principalId, principalId),
-            eq(principalPermissionGrants.permissionKey, permissionKey),
-          ),
-        );
-      if (options.decidedBy) {
-        await recordPermissionRevocations(db, principal, [permissionKey], options.decidedBy);
-      }
+      // The delete and its revocation record commit together, under the
+      // principal's lock, so no automatic grant can land between them.
+      await db.transaction(async (tx) => {
+        const txDb = tx as unknown as Db;
+        await lockPrincipalPermissions(txDb, principal);
+        await tx.delete(principalPermissionGrants).where(principalGrantConditions);
+        if (options.decidedBy) {
+          await recordPermissionRevocations(txDb, principal, [permissionKey], options.decidedBy);
+        }
+      });
       return;
     }
 
-    const grantable = await resolveGrantableKeys(db, principal, [permissionKey], options.decidedBy ?? null);
-    if (!grantable.has(permissionKey)) return;
-
-    await ensureMembership(companyId, principalType, principalId, "member", "active");
-
-    const existing = await db
-      .select()
-      .from(principalPermissionGrants)
-      .where(
-        and(
-          eq(principalPermissionGrants.companyId, companyId),
-          eq(principalPermissionGrants.principalType, principalType),
-          eq(principalPermissionGrants.principalId, principalId),
-          eq(principalPermissionGrants.permissionKey, permissionKey),
-        ),
-      )
-      .then((rows) => rows[0] ?? null);
-
-    if (existing) {
-      await db
-        .update(principalPermissionGrants)
-        .set({
+    const granted = await db.transaction(async (tx) => {
+      const txDb = tx as unknown as Db;
+      await lockPrincipalPermissions(txDb, principal);
+      const grantable = await resolveGrantableKeys(txDb, principal, [permissionKey], options.decidedBy ?? null);
+      if (!grantable.has(permissionKey)) return false;
+      const now = new Date();
+      await tx
+        .insert(principalPermissionGrants)
+        .values({
+          companyId,
+          principalType,
+          principalId,
+          permissionKey,
           scope,
           grantedByUserId,
-          updatedAt: new Date(),
+          createdAt: now,
+          updatedAt: now,
         })
-        .where(eq(principalPermissionGrants.id, existing.id));
-      return;
-    }
-
-    await db.insert(principalPermissionGrants).values({
-      companyId,
-      principalType,
-      principalId,
-      permissionKey,
-      scope,
-      grantedByUserId,
-      createdAt: new Date(),
-      updatedAt: new Date(),
+        .onConflictDoUpdate({
+          target: [
+            principalPermissionGrants.companyId,
+            principalPermissionGrants.principalType,
+            principalPermissionGrants.principalId,
+            principalPermissionGrants.permissionKey,
+          ],
+          set: { scope, grantedByUserId, updatedAt: now },
+        });
+      return true;
     });
+    if (granted) {
+      await ensureMembership(companyId, principalType, principalId, "member", "active");
+    }
   }
 
   async function updateMember(
