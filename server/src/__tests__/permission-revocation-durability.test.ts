@@ -413,6 +413,38 @@ describeEmbeddedPostgres("a revoked permission stays revoked", () => {
     expect(res.body.access).toMatchObject({ canAssignTasks: false, taskAssignSource: "revoked" });
   }, 60_000);
 
+  it("leaves task assignment alone when a permission update does not name it", async () => {
+    const { access } = await services();
+    const company = await seedCompany();
+    const ceo = await seedRootCeo(company.id);
+    await access.setPrincipalPermission(company.id, "agent", ceo.id, "tasks:assign", false, BOARD_USER_ID, null, {
+      decidedBy: { actorType: "user", actorId: BOARD_USER_ID },
+    });
+    const [worker] = await db
+      .insert(agents)
+      .values({ companyId: company.id, name: "Worker", role: "engineer", reportsTo: ceo.id, adapterType: "process", permissions: { canCreateAgents: false } })
+      .returning();
+    await access.ensureMembership(company.id, "agent", worker!.id, "member", "active");
+    await access.setPrincipalPermission(company.id, "agent", worker!.id, "tasks:assign", true, BOARD_USER_ID, null, {
+      decidedBy: { actorType: "user", actorId: BOARD_USER_ID },
+    });
+    const app = await createApp(db, boardActor(company.id));
+
+    // Only the task assignment switch sends canAssignTasks, so a page loaded
+    // before a revoke cannot undo it, and other switches cannot revoke it.
+    const ceoEdit = await request(app)
+      .patch(`/api/agents/${ceo.id}/permissions`)
+      .send({ canCreateAgents: true, canCreateSkills: false });
+    expect(ceoEdit.status, JSON.stringify(ceoEdit.body)).toBe(200);
+    expect(await grantKeys(company.id, "agent", ceo.id)).not.toContain("tasks:assign");
+
+    const workerEdit = await request(app)
+      .patch(`/api/agents/${worker!.id}/permissions`)
+      .send({ canCreateAgents: false, canCreateSkills: false });
+    expect(workerEdit.status, JSON.stringify(workerEdit.body)).toBe(200);
+    expect(await grantKeys(company.id, "agent", worker!.id)).toContain("tasks:assign");
+  }, 60_000);
+
   it("lets a board member turn a CEO's revoked task assignment back on from the agent page", async () => {
     const { access } = await services();
     const company = await seedCompany();

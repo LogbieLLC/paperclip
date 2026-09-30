@@ -2048,11 +2048,12 @@ export function ConfigurationTab({
 
   const canCreateAgents = Boolean(agent.permissions?.canCreateAgents);
   const canCreateSkills = agent.permissions?.canCreateSkills !== false;
+  // Only the task assignment switch sends `canAssignTasks`: the others leave
+  // it out, so a page loaded before a board member's revoke cannot undo it.
   const {
     canAssignTasks,
     locked: taskAssignLocked,
     hint: taskAssignHint,
-    valueWhenEnablingAgentCreation,
   } = taskAssignSwitch({ role: agent.role, canCreateAgents, access: agent.access });
 
   return (
@@ -2096,7 +2097,6 @@ export function ConfigurationTab({
           updatePermissions.mutate({
             canCreateAgents,
             canCreateSkills,
-            canAssignTasks,
             ...buildPermissionsForTrustPreset(nextPermissions, nextPermissions.trustPreset === "low_trust_review" ? "low_trust_review" : "standard"),
           })
         }
@@ -2118,7 +2118,6 @@ export function ConfigurationTab({
                 updatePermissions.mutate({
                   canCreateAgents: !canCreateAgents,
                   canCreateSkills,
-                  canAssignTasks: !canCreateAgents ? valueWhenEnablingAgentCreation : canAssignTasks,
                 })
               }
               disabled={updatePermissions.isPending}
@@ -2137,7 +2136,6 @@ export function ConfigurationTab({
                 updatePermissions.mutate({
                   canCreateAgents,
                   canCreateSkills: !canCreateSkills,
-                  canAssignTasks,
                 })
               }
               disabled={updatePermissions.isPending}
@@ -2169,7 +2167,6 @@ export function ConfigurationTab({
               updatePermissions.mutate({
                 canCreateAgents,
                 canCreateSkills,
-                canAssignTasks,
                 canApproveJoins,
               })
             }

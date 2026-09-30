@@ -435,6 +435,30 @@ describeEmbeddedPostgres("join request approval bootstraps and empowers the comp
     expect(await grantKeys(db, company.id, founder!.id)).toContain("joins:approve");
   }, 30_000);
 
+  it("still cancels a leftover agent's work when a rejection is retried after terminating it", async () => {
+    const company = await seedCompany(db);
+    const joinRequest = await seedJoinRequest(db, company.id, { requestType: "agent", agentName: "OpenClaw" });
+    // An earlier rejection terminated the leftover agent, then failed before
+    // it could cancel the agent's work or mark the request rejected.
+    const [leftover] = await db
+      .insert(agents)
+      .values({ companyId: company.id, name: "OpenClaw", role: "ceo", status: "terminated", adapterType: "openclaw_gateway" })
+      .returning();
+    await db.update(joinRequests).set({ createdAgentId: leftover!.id }).where(eq(joinRequests.id, joinRequest.id));
+    const [queuedRun] = await db
+      .insert(heartbeatRuns)
+      .values({ companyId: company.id, agentId: leftover!.id, status: "queued" })
+      .returning();
+
+    const res = await request(await createApp(db, boardActor(company.id)))
+      .post(`/api/companies/${company.id}/join-requests/${joinRequest.id}/reject`)
+      .send({});
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const [run] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, queuedRun!.id));
+    expect(run!.status).toBe("cancelled");
+  }, 30_000);
+
   it("terminates the agent an interrupted approval left behind when the request is then rejected", async () => {
     const company = await seedCompany(db);
     const joinRequest = await seedJoinRequest(db, company.id, { requestType: "agent", agentName: "OpenClaw" });

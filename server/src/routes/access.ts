@@ -4511,14 +4511,18 @@ export function accessRoutes(
         let terminatedAgentId: string | null = null;
         if (existing.requestType === "agent" && existing.createdAgentId) {
           const leftover = await agents.getById(existing.createdAgentId);
-          if (leftover && leftover.companyId === companyId && leftover.status !== "terminated") {
-            await agents.terminate(leftover.id);
+          if (leftover && leftover.companyId === companyId) {
+            if (leftover.status !== "terminated") {
+              await agents.terminate(leftover.id);
+              terminatedAgentId = leftover.id;
+            }
+            // Also when already terminated: an earlier rejection may have
+            // terminated the agent and failed before cancelling its work.
             heartbeat ??= heartbeatService(db);
             await heartbeat.cancelInvocationsForAgents(
               [leftover.id],
               "Cancelled because the agent's join request was rejected",
             );
-            terminatedAgentId = leftover.id;
           }
         }
 

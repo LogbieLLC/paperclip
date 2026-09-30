@@ -7,8 +7,7 @@ type TaskAssignAccess = Partial<Pick<AgentAccessState, "canAssignTasks" | "taskA
  *
  * A CEO or an agent that can create agents assigns tasks by role, so the
  * switch is locked on. A board member's revoke overrides that: the switch
- * shows off and unlocks, so only a board member's click turns it back on and
- * no other switch brings it back.
+ * shows off and unlocks, so a board member's click can turn it back on.
  */
 export function taskAssignSwitch(agent: {
   role: string;
@@ -34,7 +33,5 @@ export function taskAssignSwitch(agent: {
     canAssignTasks,
     locked: !revoked && (agent.role === "ceo" || agent.canCreateAgents),
     hint,
-    /** `canAssignTasks` to send when agent creation is switched on. */
-    valueWhenEnablingAgentCreation: revoked ? canAssignTasks : true,
   };
 }

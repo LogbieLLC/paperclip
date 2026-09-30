@@ -5043,14 +5043,16 @@ export function agentRoutes(
       return;
     }
 
-    // A CEO or an agent that can create agents assigns tasks by role. When
-    // `canAssignTasks` is false for such an agent, the grant still follows the
-    // role, as an automatic grant that never restores a revoked key. The
-    // agent page sends false while task assignment is revoked, so other
-    // switches cannot bring it back; `true` is a decision to turn it on.
+    // `canAssignTasks` is a decision only when the request names it; only the
+    // task assignment switch sends it, so a page loaded before a revoke
+    // cannot undo it. A CEO or an agent that can create agents also assigns
+    // tasks by role: that grant is automatic and never restores a revoked
+    // key, and the role cannot be switched off with `false`.
+    const requestedCanAssignTasks: boolean | undefined = req.body.canAssignTasks;
     const taskAssignFollowsRole = agent.role === "ceo" || Boolean(agent.permissions?.canCreateAgents);
-    const effectiveCanAssignTasks = taskAssignFollowsRole || req.body.canAssignTasks;
-    const taskAssignIsDecision = req.body.canAssignTasks || !taskAssignFollowsRole;
+    const taskAssignIsDecision =
+      requestedCanAssignTasks === true || (requestedCanAssignTasks === false && !taskAssignFollowsRole);
+    const effectiveCanAssignTasks = taskAssignFollowsRole || requestedCanAssignTasks === true;
     const grantedByUserId = req.actor.type === "board" ? (req.actor.userId ?? null) : null;
     // Recorded as an explicit decision: turning a permission off is durable,
     // and only a person can turn a revoked permission back on.
@@ -5058,16 +5060,19 @@ export function agentRoutes(
       ? { actorType: "agent" as const, actorId: req.actor.agentId ?? "unknown-agent" }
       : { actorType: "user" as const, actorId: req.actor.userId ?? "board" };
     await access.ensureMembership(agent.companyId, "agent", agent.id, "member", "active");
-    const taskAssignApplied = await access.setPrincipalPermission(
-      agent.companyId,
-      "agent",
-      agent.id,
-      "tasks:assign",
-      effectiveCanAssignTasks,
-      grantedByUserId,
-      null,
-      taskAssignIsDecision ? { decidedBy } : {},
-    );
+    // Omitted for an agent that does not assign tasks by role: no change.
+    const taskAssignApplied = taskAssignIsDecision || taskAssignFollowsRole
+      ? await access.setPrincipalPermission(
+        agent.companyId,
+        "agent",
+        agent.id,
+        "tasks:assign",
+        effectiveCanAssignTasks,
+        grantedByUserId,
+        null,
+        taskAssignIsDecision ? { decidedBy } : {},
+      )
+      : null;
     if (canApproveJoins !== undefined) {
       await access.setPrincipalPermission(
         agent.companyId,
@@ -5095,8 +5100,8 @@ export function agentRoutes(
       details: {
         canCreateAgents: agent.permissions?.canCreateAgents ?? false,
         canCreateSkills: agent.permissions?.canCreateSkills ?? true,
-        // What was applied: a revoked grant stays off.
-        canAssignTasks: effectiveCanAssignTasks && taskAssignApplied,
+        // What was applied, when this update touched it: a revoked grant stays off.
+        ...(taskAssignApplied === null ? {} : { canAssignTasks: effectiveCanAssignTasks && taskAssignApplied }),
         ...(canApproveJoins !== undefined ? { canApproveJoins } : {}),
         trustPreset: agent.permissions?.trustPreset ?? "standard",
       },

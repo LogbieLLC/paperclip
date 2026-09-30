@@ -291,7 +291,9 @@ export type TestAdapterEnvironment = z.infer<typeof testAdapterEnvironmentSchema
 export const updateAgentPermissionsSchema = z.object({
   canCreateAgents: z.boolean(),
   canCreateSkills: z.boolean().optional(),
-  canAssignTasks: z.boolean(),
+  // Omit to leave task assignment unchanged. Only the task assignment
+  // switch sends it, so a stale page cannot undo a revoke.
+  canAssignTasks: z.boolean().optional(),
   // Board-only: whether the agent may approve or decline agent join requests.
   canApproveJoins: z.boolean().optional(),
   trustPreset: trustPresetSchema.optional(),
