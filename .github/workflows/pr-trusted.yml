@@ -48,7 +48,8 @@ jobs:
         run: |
           set -u
 
-          github_runner='ubuntu-latest'
+          # Fork-only (LogbieLLC): Blacksmith instead of GitHub-hosted runners.
+          github_runner='blacksmith-4vcpu-ubuntu-2404'
           aws_runner='runs-on/fleet=paperclip-public-pr-x64/env=public-ci'
 
           fail_closed() {
