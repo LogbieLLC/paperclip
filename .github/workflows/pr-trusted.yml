@@ -18,7 +18,7 @@ concurrency:
 jobs:
   gate:
     name: Select trusted runner
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     outputs:
       runner: ${{ steps.route.outputs.runner }}

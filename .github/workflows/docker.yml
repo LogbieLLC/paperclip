@@ -64,10 +64,10 @@ jobs:
       matrix:
         include:
           - platform: linux/amd64
-            runner: ubuntu-latest
+            runner: blacksmith-4vcpu-ubuntu-2404
             arch: amd64
           - platform: linux/arm64
-            runner: ubuntu-24.04-arm
+            runner: blacksmith-4vcpu-ubuntu-2404-arm
             arch: arm64
     runs-on: ${{ matrix.runner }}
     # Native builds land well inside this; it is a backstop, not a budget.
@@ -79,7 +79,7 @@ jobs:
       packages: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: useblacksmith/checkout@v1
         with:
           # Full history and tags so `git describe` below can compute the
           # release version to stamp into the image.
@@ -274,7 +274,7 @@ jobs:
   # multi-arch image is not a state anything can pull.
   merge-and-push:
     needs: build-and-push
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 20
     permissions:
       contents: read
@@ -285,7 +285,7 @@ jobs:
       # Checked out for `packages/db` (schema labels) and the orphan-reaping
       # script the verification step pipes in.
       - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: useblacksmith/checkout@v1 # v7
         with:
           fetch-depth: 0
 
@@ -408,7 +408,7 @@ jobs:
     # digests, and the production `sha-*` tags this promotion retags only
     # exist once the manifest merge has named them.
     needs: [merge-and-push]
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     permissions:
       contents: read

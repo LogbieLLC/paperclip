@@ -46,7 +46,7 @@ jobs:
   authorize:
     name: Authorize paid direct eval campaign
     if: github.event_name != 'schedule' || vars.RUNNER_PROTOCOL_EVAL_NIGHTLY_ENABLED == 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     permissions:
       contents: read
@@ -108,7 +108,7 @@ jobs:
           echo "sha=$target_sha" >> "$GITHUB_OUTPUT"
           echo "ref=refs/heads/$TARGET_BRANCH" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: useblacksmith/checkout@v1 # v7
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -169,7 +169,7 @@ jobs:
   target_lock:
     name: Resolve target pnpm lockfile
     needs: authorize
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     permissions:
       contents: read
@@ -177,7 +177,7 @@ jobs:
       artifact_id: ${{ steps.upload.outputs.artifact-id }}
       lock_sha256: ${{ steps.lock.outputs.sha256 }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: useblacksmith/checkout@v1 # v7
         with:
           ref: ${{ needs.authorize.outputs.target_sha }}
           persist-credentials: false
@@ -220,7 +220,7 @@ jobs:
   catalog:
     name: Pin and fan out the direct Evalbook roster
     needs: authorize
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     permissions:
       contents: read
@@ -231,7 +231,7 @@ jobs:
       max_parallel_per_shard: ${{ steps.catalog.outputs.max_parallel_per_shard }}
       selected: ${{ steps.catalog.outputs.selected }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: useblacksmith/checkout@v1 # v7
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -247,7 +247,7 @@ jobs:
           echo "::add-mask::$token"
           echo "value=$token" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: useblacksmith/checkout@v1 # v7
         with:
           repository: paperclipai/paperclip-evals
           ref: ${{ needs.authorize.outputs.evals_sha }}
@@ -656,7 +656,7 @@ jobs:
     name: Merge attempts and render canonical Evalbook
     if: always() && !cancelled() && needs.catalog.result == 'success' && needs.build_runner.result == 'success'
     needs: [authorize, catalog, build_runner, eval_shard_0, eval_shard_1]
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 30
     permissions:
       actions: read
@@ -664,7 +664,7 @@ jobs:
     outputs:
       public_report_ready: ${{ steps.public_report.outputs.ready }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: useblacksmith/checkout@v1 # v7
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -680,7 +680,7 @@ jobs:
           echo "::add-mask::$token"
           echo "value=$token" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: useblacksmith/checkout@v1 # v7
         with:
           repository: paperclipai/paperclip-evals
           ref: ${{ needs.authorize.outputs.evals_sha }}
@@ -843,7 +843,7 @@ jobs:
     name: Publish immutable Evalbook and mutable campaign index
     needs: [authorize, catalog, report]
     if: always() && needs.report.outputs.public_report_ready == 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 15
     concurrency:
       group: runner-protocol-eval-history-publish
@@ -855,7 +855,7 @@ jobs:
       name: runner-e2e-history
       url: ${{ steps.publish.outputs.report_url }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: useblacksmith/checkout@v1 # v7
         with:
           # AWS credentials can execute only the publisher from the trusted workflow revision.
           ref: ${{ github.sha }}

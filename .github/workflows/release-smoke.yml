@@ -45,12 +45,12 @@ jobs:
   # on the runner VM's systemd and require the installed service to end up
   # serving.
   smoke_service:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 30
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: useblacksmith/checkout@v1
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
@@ -98,7 +98,7 @@ jobs:
           retention-days: 14
 
   smoke:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 45
 
     # Fixed here rather than read back out of the harness, so the `always()`
@@ -110,7 +110,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: useblacksmith/checkout@v1
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
