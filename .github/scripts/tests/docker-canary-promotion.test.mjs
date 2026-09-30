@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
-const workflow = readFileSync(new URL("../../workflows/docker.yml", import.meta.url), "utf8");
+const workflow = readFileSync(new URL("../../workflows/docker.yml", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const job = workflow.split("  promote_canary_channel:\n")[1];
 const script = job.split("        run: |\n")[1].split("\n").map(line => line.replace(/^ {10}/, "")).join("\n");
 const sha = "a".repeat(40);
@@ -16,12 +16,13 @@ test("canary promotion waits for the standard manifest and keeps its serialized 
   assert.match(job, /cancel-in-progress: false/);
 });
 
-for (const [name, commitPresent, imagePresent] of [
-  ["promotes the current npm canary without a cloud image", true, true],
-  ["waits when the standard image is missing", true, false],
-  ["waits when the npm canary tag has not resolved", false, false],
+for (const [name, commitPresent, imagePresent, image] of [
+  ["promotes the current npm canary without a cloud image", true, true, "ghcr.io/paperclipai/paperclip"],
+  ["normalizes a mixed-case fork image", true, true, "ghcr.io/LogbieLLC/paperclip"],
+  ["waits when the standard image is missing", true, false, "ghcr.io/paperclipai/paperclip"],
+  ["waits when the npm canary tag has not resolved", false, false, "ghcr.io/paperclipai/paperclip"],
 ]) {
-  test(name, () => {
+  test(name, { skip: process.platform === "win32" && "requires POSIX shell fixtures" }, () => {
     const dir = mkdtempSync(path.join(tmpdir(), "standard-canary-promotion-"));
     const log = path.join(dir, "calls.jsonl");
     const fixture = `#!${process.execPath}
@@ -39,7 +40,7 @@ else if (args.slice(0, 3).join(" ") !== "buildx imagetools create") process.exit
       const result = spawnSync("bash", ["-e", "-o", "pipefail", "-c", script], {
         encoding: "utf8", env: {
           ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH}`,
-          IMAGE: "ghcr.io/paperclipai/paperclip", GITHUB_REPOSITORY: "paperclipai/paperclip",
+          IMAGE: image, GITHUB_REPOSITORY: image.slice("ghcr.io/".length),
           TEST_CALLS: log, TEST_SHA: sha, COMMIT_PRESENT: String(commitPresent), IMAGE_PRESENT: String(imagePresent),
         },
       });
@@ -47,9 +48,10 @@ else if (args.slice(0, 3).join(" ") !== "buildx imagetools create") process.exit
       const calls = readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line));
       assert.ok(calls.find(call => call.command === "gh").args.some(arg => arg.includes("canary%2Fv2026.922.0-canary.1")));
       const docker = calls.filter(call => call.command === "docker").map(call => call.args);
+      const normalizedImage = image.toLowerCase();
       assert.deepEqual(docker, [
-        ...(commitPresent ? [["buildx", "imagetools", "inspect", "ghcr.io/paperclipai/paperclip:sha-aaaaaaa"]] : []),
-        ...(commitPresent && imagePresent ? [["buildx", "imagetools", "create", "-t", "ghcr.io/paperclipai/paperclip:canary", "ghcr.io/paperclipai/paperclip:sha-aaaaaaa"]] : []),
+        ...(commitPresent ? [["buildx", "imagetools", "inspect", `${normalizedImage}:sha-aaaaaaa`]] : []),
+        ...(commitPresent && imagePresent ? [["buildx", "imagetools", "create", "-t", `${normalizedImage}:canary`, `${normalizedImage}:sha-aaaaaaa`]] : []),
       ]);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
