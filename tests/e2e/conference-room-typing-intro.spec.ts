@@ -81,7 +81,7 @@ async function runOnboardingWizard(page: Page, companyName: string) {
   // Step 1's "Next" creates the company; the mission step no longer runs.
 
   // Step 3: name the agent. The role picker is gone — the arc asks for a
-  // name and hires under the neutral `general` role.
+  // name and hires the first agent as the company's CEO.
   await page.waitForSelector("#onboarding-agent-name", { timeout: 30_000 });
   await page.locator("#onboarding-agent-name").fill("Ada");
   await page.getByRole("button", { name: /^Next$/ }).click();

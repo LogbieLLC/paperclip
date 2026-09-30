@@ -539,7 +539,7 @@ describe("OnboardingWizard — which step it lands on", () => {
 
     /**
      * Name the agent. The role picker is gone — the arc asks for a name and
-     * hires with the neutral `general` role — so advancing from step 3 means
+     * hires the first agent as the company's CEO — so advancing from step 3 means
      * putting something in the one field it has.
      */
     async function nameAgent(name = "Ada") {
@@ -587,11 +587,11 @@ describe("OnboardingWizard — which step it lands on", () => {
       await press(tiles[0]!);
     }
 
-    it("hires under the neutral role, with the name the customer typed", async () => {
+    it("hires the first agent as CEO, with the name the customer typed", async () => {
       // The arc stopped asking for a role, so every onboarding hire is filed
-      // as `general` — and the hire guard returns *silently* when the role is
-      // missing, which is exactly how removing the picker could have shipped a
-      // Connect button that hires nobody. This is the test that catches that.
+      // as the company's CEO whatever its name. Removing the picker could have
+      // shipped a Connect button that hires nobody; this test catches that
+      // too, because it requires a hire.
       await openOnAgentStep();
       await nameAgent("Ada");
 
@@ -601,7 +601,7 @@ describe("OnboardingWizard — which step it lands on", () => {
 
       expect(mockAgentsApi.hire).toHaveBeenCalled();
       const [, payload] = mockAgentsApi.hire.mock.calls.at(-1)!;
-      expect(payload.role).toBe("general");
+      expect(payload.role).toBe("ceo");
       expect(payload.name).toBe("Ada");
     });
 

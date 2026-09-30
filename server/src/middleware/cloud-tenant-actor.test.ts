@@ -12,7 +12,10 @@ import { cloudActorHeaderSourceFromHeaders, resolveCloudTenantActor } from "./au
 // flag resolution through instanceSettingsService, and companyMemberships for
 // the user's own membership rows (rows configurable via membershipQueryRows,
 // where-conditions captured in selectWheres). The chain is awaitable so
-// directly-awaited statements resolve.
+// directly-awaited statements resolve. transaction() runs its callback on the
+// same fake and execute() accepts the per-principal advisory lock taken while
+// role default grants are seeded. selectThrows fails the membership and
+// settings reads that the degrade/fail-closed cases below describe.
 function createFakeDb(options: {
   membershipRow?: { companyId: string; membershipRole: string; status: string };
   membershipQueryRows?: Array<{ companyId: string; membershipRole: string | null; status: string }>;
@@ -52,11 +55,15 @@ function createFakeDb(options: {
       deletedTables.push(table);
       return chain;
     },
+    transaction: async (run: (tx: unknown) => Promise<unknown>) => run(db),
+    execute: async () => [],
     select: () => {
-      if (options.selectThrows) throw new Error("select unavailable");
       return {
         from: (table: unknown) => ({
           where: (condition: unknown) => {
+            if (options.selectThrows && (table === companyMemberships || table === instanceSettings)) {
+              throw new Error("select unavailable");
+            }
             selectWheres.push({ table, condition });
             const rows =
               table === instanceSettings && settingsRow

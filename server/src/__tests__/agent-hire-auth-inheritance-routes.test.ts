@@ -15,6 +15,7 @@ import {
   companySecretProviderConfigs,
   companySecretVersions,
   companySecrets,
+  companySkills,
   createDb,
   environments,
   approvals,
@@ -92,6 +93,9 @@ describeEmbeddedPostgres("hired agent provider credential inheritance", () => {
     await db.delete(companyMemberships);
     await db.delete(agents);
     await db.delete(environments);
+    // A hire into an empty company becomes its CEO and installs the core CEO
+    // skills for the company.
+    await db.delete(companySkills);
     await db.delete(companies);
   });
 

@@ -22,6 +22,15 @@ function createSelectChain(rows: unknown[]) {
   };
 }
 
+// Cloud tenant sign-in seeds role default grants inside a transaction that
+// takes the principal's permission lock (db.execute) before reading revoked
+// keys, so the hand-built fakes below need both.
+function withGrantSeedingSupport(db: any) {
+  db.transaction = vi.fn(async (run: (tx: typeof db) => Promise<unknown>) => run(db));
+  db.execute = vi.fn(async () => []);
+  return db;
+}
+
 function createDb() {
   return {
     select: vi
@@ -102,6 +111,7 @@ describe("actorMiddleware authenticated session profile", () => {
       delete: vi.fn(() => ({ where: () => Promise.resolve(undefined) })),
       select: vi.fn(() => createSelectChain([])),
     } as any;
+    withGrantSeedingSupport(db);
     const app = express();
     app.use(
       actorMiddleware(db, {
@@ -186,6 +196,7 @@ describe("actorMiddleware authenticated session profile", () => {
       insert: vi.fn(() => insertChain),
       delete: vi.fn(() => ({ where: () => Promise.resolve(undefined) })),
     } as any;
+    withGrantSeedingSupport(db);
     const app = express();
     app.use(
       actorMiddleware(db, {
@@ -280,7 +291,7 @@ describe("actorMiddleware authenticated session profile", () => {
       })),
       delete: vi.fn(() => ({ where: () => Promise.resolve(undefined) })),
     } as any;
-    db.transaction = vi.fn(async (run: (tx: typeof db) => Promise<void>) => run(db));
+    withGrantSeedingSupport(db);
     const app = express();
     app.use(
       actorMiddleware(db, {
@@ -362,6 +373,7 @@ describe("actorMiddleware authenticated session profile", () => {
         },
       })),
     } as any;
+    withGrantSeedingSupport(db);
     const app = express();
     app.use(
       actorMiddleware(db, {

@@ -98,6 +98,7 @@ describeEmbeddedPostgres("access service", () => {
         owner.id,
         { membershipRole: "admin", grants: [] },
         "admin-user",
+        { actorType: "user", actorId: "admin-user" },
       ),
     ).rejects.toThrow("Cannot remove the last active owner");
 

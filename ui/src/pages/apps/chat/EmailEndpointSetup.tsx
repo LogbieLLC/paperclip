@@ -144,7 +144,6 @@ export function EmailEndpointSetup() {
           ...permissions,
           canCreateAgents: permissions.canCreateAgents ?? false,
           canCreateSkills: permissions.canCreateSkills ?? true,
-          canAssignTasks: agentDetail.data?.access?.canAssignTasks ?? false,
         },
         companyId,
       ),
